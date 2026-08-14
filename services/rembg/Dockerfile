@@ -1,4 +1,4 @@
-FROM python:3.11-slim@sha256:94c50be2dc994b873b55bc123e95e6dbade08095b3dfd790f51c34de3f08cbb7
+FROM python:3.14-slim@sha256:ce40764625a4ff50df3548277632e7f96c4e77fe75fa848aae9885476e7df5a4
 
 ARG DQ_REMBG_MODEL=silueta
 ARG DQ_REMBG_MODELS=u2net,isnet-general-use,u2net_human_seg,isnet-anime,silueta
