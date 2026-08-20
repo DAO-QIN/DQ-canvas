@@ -2,7 +2,7 @@
 
 import { App, Button, Drawer } from "antd";
 import type { TextAreaRef } from "antd/es/input/TextArea";
-import { Clapperboard, History, Play, Plus, RefreshCw, ScanFace, ShoppingBag, Sparkles } from "lucide-react";
+import { History, Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
@@ -10,6 +10,7 @@ import { SiteLogo } from "@/components/layout/site-logo";
 import { FirstUseGuide } from "@/components/onboarding/first-use-guide";
 import { CREATIVE_UPLOAD_ACCEPT, CREATIVE_UPLOAD_MAX_BYTES, isCreativeUploadMimeType } from "@/lib/creative-upload";
 import type { CreateOverviewAsset } from "@/lib/create-workbench-overview";
+import type { CreativeAsset } from "@/lib/creative-runtime-contract";
 import { useCreativeAgentModels } from "@/hooks/use-creative-agent-options";
 import { listAgentSkills, type AgentSkillSummary } from "@/services/api/agent-skills";
 import { usePublicSessionStore } from "@/stores/use-public-session-store";
@@ -19,18 +20,14 @@ import { createAgentPromptFromHash } from "@/lib/create-agent-prompt";
 
 import { CreativeComposer } from "./components/creative-composer";
 import { CreativeConversationList } from "./components/creative-conversation-list";
+import { DirectCreationMessages } from "./components/direct-creation-messages";
 import { CreateInspirationGallery } from "./components/create-inspiration-gallery";
 import { CreativeMessages } from "./components/creative-messages";
 import { CreateWorkbenchOverview } from "./components/create-workbench-overview";
 import { createConversationHref, createConversationIdFromSearch } from "./create-conversation-navigation";
+import { creationModeLabels, type CreationMode } from "./creation-mode";
 import { useCreateAgent } from "./use-create-agent";
-
-const SKILL_VISUALS = [
-    { icon: ShoppingBag, iconClass: "text-sky-600 dark:text-sky-300", surfaceClass: "bg-sky-50 dark:bg-sky-400/10" },
-    { icon: ScanFace, iconClass: "text-violet-600 dark:text-violet-300", surfaceClass: "bg-violet-50 dark:bg-violet-400/10" },
-    { icon: Play, iconClass: "text-emerald-600 dark:text-emerald-300", surfaceClass: "bg-emerald-50 dark:bg-emerald-400/10" },
-    { icon: Clapperboard, iconClass: "text-red-500 dark:text-red-300", surfaceClass: "bg-red-50 dark:bg-red-400/10" },
-] as const;
+import { useDirectCreation, type DirectCreationMessage, type DirectVideoMethod } from "./use-direct-creation";
 
 export default function CreatePage() {
     const { message } = App.useApp();
@@ -42,32 +39,33 @@ export default function CreatePage() {
     const [prompt, setPrompt] = useState("");
     const [skills, setSkills] = useState<AgentSkillSummary[]>([]);
     const [skillsLoading, setSkillsLoading] = useState(true);
-    const [skillsLoadError, setSkillsLoadError] = useState("");
-    const [skillsLoadVersion, setSkillsLoadVersion] = useState(0);
-    const [selectedSkillId, setSelectedSkillId] = useState<string>();
-    const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
-    const [selectedAgentModelId, setSelectedAgentModelId] = useState("");
-    const [smartPlanning, setSmartPlanning] = useState(true);
+    const [selectedSkillIds, setSelectedSkillIds] = useState<Partial<Record<CreationMode, string>>>({});
+    const [mode, setMode] = useState<CreationMode>("agent");
+    const [videoCount, setVideoCount] = useState(1);
+    const [videoMethod, setVideoMethod] = useState<DirectVideoMethod>("auto");
+    const [directAssets, setDirectAssets] = useState<CreativeAsset[]>([]);
     const [historyOpen, setHistoryOpen] = useState(false);
     const publicSettings = usePublicSessionStore((state) => state.payload?.settings);
     const currentUser = usePublicSessionStore((state) => state.payload?.user);
     const publicSessionReady = usePublicSessionStore((state) => state.ready);
     const config = useConfigStore((state) => state.config);
+    const updateConfig = useConfigStore((state) => state.updateConfig);
     const site = publicSettings?.site || { title: "DQ-绘图", logoUrl: "/logo.svg" };
     const agent = useCreateAgent();
+    const direct = useDirectCreation(config, currentUser?.id);
     const openAgentConversation = agent.openConversation;
     const newAgentConversation = agent.newConversation;
-    const hasConversation = agent.messages.length > 0;
-    const showConversation = hasConversation || agent.conversationLoading;
+    const hasAgentConversation = agent.messages.length > 0;
+    const hasConversation = mode === "agent" ? hasAgentConversation : direct.messages.length > 0;
+    const showConversation = hasConversation || (mode === "agent" && agent.conversationLoading);
+    const selectedSkillId = selectedSkillIds[mode];
     const selectedSkill = skills.find((skill) => skill.id === selectedSkillId);
-    const modelOptions = useCreativeAgentModels();
-    const selectedModels = modelOptions.filter((model) => selectedModelIds.includes(model.id));
-    const missingModels = [!config.textModel ? "默认文本模型" : "", !modelOptions.length ? "至少一个图片、视频或音频模型" : ""].filter(Boolean);
+    const modelOptions = useCreativeAgentModels().filter((model) => model.capability === "image" || model.capability === "video");
+    const missingModels = [!config.textModel ? "默认文本模型" : "", !modelOptions.length ? "至少一个图片或视频模型" : ""].filter(Boolean);
 
     useEffect(() => {
         let active = true;
         setSkillsLoading(true);
-        setSkillsLoadError("");
         void listAgentSkills("all")
             .then((items) => {
                 if (active) setSkills(items);
@@ -75,7 +73,7 @@ export default function CreatePage() {
             .catch((error) => {
                 if (active) {
                     setSkills([]);
-                    setSkillsLoadError(error instanceof Error ? error.message : "加载创作 Skill 失败");
+                    message.error(error instanceof Error ? error.message : "加载创作 Skill 失败");
                 }
             })
             .finally(() => {
@@ -84,7 +82,7 @@ export default function CreatePage() {
         return () => {
             active = false;
         };
-    }, [skillsLoadVersion]);
+    }, [message]);
 
     useEffect(() => {
         if (initialConversationRestoredRef.current) return;
@@ -109,6 +107,7 @@ export default function CreatePage() {
     }, [message, router]);
 
     const openConversation = (id: string) => {
+        setMode("agent");
         router.push(createConversationHref(id));
         void openAgentConversation(id).catch((error) => {
             message.error(error instanceof Error ? error.message : "打开对话失败");
@@ -116,16 +115,15 @@ export default function CreatePage() {
         });
     };
 
-    const enableSmartPlanning = () => {
-        setSelectedModelIds([]);
-        setSelectedSkillId(undefined);
-        setSelectedAgentModelId("");
-        setSmartPlanning(true);
-    };
-
     const newConversation = () => {
-        newAgentConversation();
-        enableSmartPlanning();
+        if (mode === "agent") {
+            newAgentConversation();
+        } else {
+            direct.clear();
+            setDirectAssets([]);
+        }
+        setSelectedSkillIds({});
+        agent.clearAttachments();
         router.replace("/create");
     };
 
@@ -135,26 +133,44 @@ export default function CreatePage() {
             inputRef.current?.focus();
             return;
         }
-        if (!smartPlanning && selectedModelIds.length === 0 && modelOptions.length === 0) {
-            message.warning("当前没有可用媒体模型，请联系管理员配置");
+        if (mode !== "agent") {
+            if (selectedSkill?.requiresReference && !directAssets.length) {
+                message.warning(`Skill「${selectedSkill.name}」需要先添加参考素材`);
+                return;
+            }
+            if (
+                direct.submit({
+                    mode,
+                    prompt,
+                    assets: directAssets,
+                    videoCount,
+                    videoMethod,
+                    skillIds: selectedSkillId ? [selectedSkillId] : [],
+                })
+            ) {
+                setPrompt("");
+                setDirectAssets([]);
+                setSelectedSkillIds((current) => ({ ...current, [mode]: undefined }));
+                agent.clearAttachments();
+            }
             return;
         }
         if (
             await agent.submit(prompt, {
                 skillIds: selectedSkillId ? [selectedSkillId] : [],
-                agentModelId: selectedAgentModelId || undefined,
-                ...(!smartPlanning && selectedModelIds.length ? { modelIds: selectedModelIds } : {}),
             })
         ) {
             setPrompt("");
-            setSelectedSkillId(undefined);
+            setSelectedSkillIds((current) => ({ ...current, agent: undefined }));
+            setDirectAssets([]);
+            agent.clearAttachments();
         }
     };
 
     const uploadAttachments = async (files: File[], successMessage?: string) => {
-        const unsupported = files.find((file) => !isCreativeUploadMimeType(file.type));
+        const unsupported = files.find((file) => !isUploadAllowedForMode(mode, file.type));
         if (unsupported) {
-            message.error(`${unsupported.name} 不是支持的图片、视频或音频格式`);
+            message.error(`${unsupported.name} 不是${attachmentTypeLabel(mode)}`);
             return false;
         }
         const oversized = files.find((file) => file.size > CREATIVE_UPLOAD_MAX_BYTES);
@@ -164,6 +180,7 @@ export default function CreatePage() {
         }
         try {
             const items = await agent.uploadAttachments(files);
+            if (mode !== "agent" && items.length) setDirectAssets((current) => Array.from(new Map([...current, ...items].map((item) => [item.id, item])).values()).slice(-20));
             if (items.length) message.success(successMessage || `已上传 ${items.length} 份素材`);
             return items.length > 0;
         } catch (error) {
@@ -178,7 +195,7 @@ export default function CreatePage() {
         message.success("已填入公开提示词");
     };
 
-    const importReferenceMedia = async (input: { url: string; mimeType?: string; fileStem: string }) => {
+    const importReferenceMedia = async (input: { url: string; mimeType?: string; fileStem: string }): Promise<boolean> => {
         try {
             const response = await fetch(input.url);
             if (!response.ok) throw new Error("读取参考素材失败");
@@ -186,10 +203,12 @@ export default function CreatePage() {
             const mimeType = blob.type || input.mimeType || "";
             if (!isCreativeUploadMimeType(mimeType)) throw new Error("该媒体格式暂不支持作为参考素材");
             const extension = mimeType.split("/")[1]?.replace("jpeg", "jpg") || "png";
-            const referenced = await uploadAttachments([new File([blob], `${input.fileStem}.${extension}`, { type: mimeType })], "已引用到 Agent 输入框");
+            const referenced = await uploadAttachments([new File([blob], `${input.fileStem}.${extension}`, { type: mimeType })], "已引用到创作输入框");
             if (referenced) window.requestAnimationFrame(() => inputRef.current?.focus());
+            return referenced;
         } catch (error) {
             message.error(error instanceof Error ? error.message : "引用素材失败");
+            return false;
         }
     };
 
@@ -199,63 +218,101 @@ export default function CreatePage() {
         await importReferenceMedia({ url: preview.url, mimeType: preview.mimeType, fileStem: item.slug });
     };
 
-    const useRecentAsset = async (asset: CreateOverviewAsset) => {
-        await importReferenceMedia({ url: asset.url, mimeType: asset.mimeType, fileStem: asset.id });
+    const importRecentAsset = async (asset: CreateOverviewAsset) => {
+        try {
+            const reference = recentOverviewAssetToCreativeAsset(asset, currentUser?.id || "");
+            if (mode === "agent") {
+                await agent.referenceExistingAsset({ id: asset.id, type: asset.kind, url: asset.url, mimeType: asset.mimeType, title: asset.title });
+            } else {
+                setDirectAssets((current) => Array.from(new Map([...current, reference].map((item) => [item.id, item])).values()).slice(-20));
+            }
+            if (mode === "video") setVideoMethod("reference");
+            window.requestAnimationFrame(() => inputRef.current?.focus());
+            message.success("已引用最近生成素材");
+            return true;
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "引用素材失败");
+            return false;
+        }
     };
 
     const selectSkill = (skill: AgentSkillSummary) => {
-        setSmartPlanning(false);
-        setSelectedSkillId(skill.id);
+        setSelectedSkillIds((current) => ({ ...current, [mode]: current[mode] === skill.id ? undefined : skill.id }));
+        if (mode === "image" || mode === "video") applySkillDefaults(skill, mode, updateConfig, setVideoCount, setVideoMethod);
         window.requestAnimationFrame(() => inputRef.current?.focus());
     };
 
-    const toggleModel = (model: (typeof modelOptions)[number]) => {
-        setSmartPlanning(false);
-        setSelectedModelIds((current) => {
-            const next = current.includes(model.id) ? current.filter((id) => id !== model.id) : [...current, model.id].slice(-6);
-            return next;
-        });
+    const changeMode = (nextMode: CreationMode) => {
+        setMode(nextMode);
+        if (nextMode === "agent") {
+            const allowedIds = agent.selectedAssets.filter((asset) => isAssetAllowedForMode(nextMode, asset.type)).map((asset) => asset.id);
+            agent.restoreAttachments(allowedIds);
+        } else {
+            setDirectAssets((current) => (mode === "agent" ? agent.selectedAssets : current).filter((asset) => isAssetAllowedForMode(nextMode, asset.type)));
+        }
         window.requestAnimationFrame(() => inputRef.current?.focus());
+    };
+
+    const reuseDirectMessage = (item: DirectCreationMessage) => {
+        const index = direct.messages.findIndex((messageItem) => messageItem.id === item.id);
+        const source =
+            item.role === "user"
+                ? item
+                : direct.messages
+                      .slice(0, index)
+                      .reverse()
+                      .find((messageItem) => messageItem.role === "user" && messageItem.mode === item.mode);
+        setMode(item.mode);
+        setPrompt(source?.content || "");
+        setDirectAssets(source?.assets || []);
+        setSelectedSkillIds((current) => ({ ...current, [item.mode]: source?.skillIds?.[0] || item.skillIds?.[0] }));
+        updateConfig(item.mode === "text" ? "textModel" : item.mode === "image" ? "imageModel" : "videoModel", item.model);
+        updateConfig("size", item.settings.size);
+        if (item.mode === "image") {
+            updateConfig("quality", item.settings.quality);
+            updateConfig("count", item.settings.count);
+        }
+        if (item.mode === "video") {
+            updateConfig("vquality", item.settings.videoQuality);
+            updateConfig("videoSeconds", item.settings.videoSeconds);
+            setVideoCount(item.settings.videoCount);
+            setVideoMethod(item.settings.videoMethod);
+        }
+        window.requestAnimationFrame(() => inputRef.current?.focus());
+        message.info("已回填提示词、素材和生成设置");
     };
 
     const composer = (
         <CreativeComposer
+            mode={mode}
             inputRef={inputRef}
             value={prompt}
-            busy={agent.sending}
+            busy={mode === "agent" ? agent.sending : direct.busy}
             centered={!showConversation}
             onChange={setPrompt}
             onSubmit={() => void submit()}
-            onCancel={() => void agent.cancel().catch((error) => message.error(error instanceof Error ? error.message : "停止任务失败"))}
-            attachments={agent.selectedAssets}
+            onCancel={() => void (mode === "agent" ? agent.cancel() : direct.cancel()).catch((error) => message.error(error instanceof Error ? error.message : "停止任务失败"))}
+            attachments={mode === "agent" ? agent.selectedAssets : directAssets}
             skills={skills}
             skillsLoading={skillsLoading}
             selectedSkill={selectedSkill}
-            models={modelOptions}
-            selectedModels={selectedModels}
-            smartPlanning={smartPlanning}
-            agentModelId={selectedAgentModelId}
             uploading={agent.uploading}
-            onRemoveAttachment={agent.removeAttachment}
+            onRemoveAttachment={(id) => {
+                if (mode === "agent") agent.removeAttachment(id);
+                else setDirectAssets((current) => current.filter((asset) => asset.id !== id));
+            }}
             onSelectSkill={selectSkill}
-            onRemoveSkill={() => {
-                setSmartPlanning(false);
-                setSelectedSkillId(undefined);
-            }}
-            onToggleModel={toggleModel}
-            onClearModels={() => {
-                enableSmartPlanning();
-            }}
-            onToggleSmartPlanning={() => {
-                if (smartPlanning) setSmartPlanning(false);
-                else enableSmartPlanning();
-            }}
-            onAgentModelChange={(model) => {
-                setSmartPlanning(false);
-                setSelectedAgentModelId(model);
-            }}
+            onRemoveSkill={() => setSelectedSkillIds((current) => ({ ...current, [mode]: undefined }))}
+            config={config}
+            onModeChange={changeMode}
+            onConfigChange={(key, value) => updateConfig(key, value)}
+            videoCount={videoCount}
+            onVideoCountChange={setVideoCount}
+            videoMethod={videoMethod}
+            onVideoMethodChange={setVideoMethod}
             onAttachment={() => attachmentInputRef.current?.click()}
             onPasteImages={(files) => void uploadAttachments(files)}
+            onMentionRecentAsset={importRecentAsset}
         />
     );
 
@@ -263,11 +320,21 @@ export default function CreatePage() {
         <main className="relative flex h-full min-h-0 flex-col overflow-hidden bg-[#fafbfc] text-[#20242a] dark:bg-[#111316] dark:text-[#f3f5f7]">
             <div className="absolute right-3 top-3 z-10 flex items-center gap-1 sm:right-5 sm:top-4">
                 {hasConversation ? <Button type="text" shape="circle" icon={<Plus className="size-4" />} onClick={newConversation} aria-label="新建对话" title="新建对话" /> : null}
-                <Button type="text" shape="circle" icon={<History className="size-4" />} onClick={() => setHistoryOpen(true)} aria-label="创作历史" title="创作历史" />
+                <Button
+                    type="text"
+                    shape="circle"
+                    icon={<History className="size-4" />}
+                    onClick={() => {
+                        setMode("agent");
+                        setHistoryOpen(true);
+                    }}
+                    aria-label="Agent 创作历史"
+                    title="Agent 创作历史"
+                />
             </div>
 
             <section className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
-                {showConversation ? (
+                {showConversation && mode === "agent" ? (
                     <CreativeMessages
                         messages={agent.messages}
                         assets={agent.assets}
@@ -294,49 +361,34 @@ export default function CreatePage() {
                         onLoadOlder={() => void agent.loadOlderMessages()}
                         canConfigureModels={currentUser?.role === "admin"}
                     />
+                ) : showConversation ? (
+                    <DirectCreationMessages messages={direct.messages} onReuse={reuseDirectMessage} />
                 ) : (
                     <div className="mx-auto flex min-h-full w-full min-w-0 max-w-[1320px] flex-col items-center px-2.5 pb-3 pt-3 sm:px-8 sm:pb-8 sm:pt-12 lg:pt-[9vh] xl:pt-[11vh]">
                         <div className="text-center">
                             <SiteLogo logoUrl={site.logoUrl} className="mx-auto size-8" />
-                            <h1 className="mt-2.5 text-[22px] font-semibold leading-tight sm:mt-5 sm:text-[30px]">{site.title} 创作 Agent</h1>
+                            <h1 className="mt-2.5 text-[22px] font-semibold leading-tight sm:mt-5 sm:text-[30px]">
+                                {site.title} {creationModeLabels[mode]}
+                            </h1>
                             <p className="mt-2 text-sm text-[#8b949f] dark:text-[#7f8996]">从一个想法开始</p>
                         </div>
-                        <FirstUseGuide
-                            ready={publicSessionReady}
-                            completed={hasConversation || agent.conversations.length > 0}
-                            missingModels={missingModels}
-                            onUseExample={() => {
-                                setPrompt("为一款透明玻璃香水瓶创作电商主视觉：冷白背景，柔和侧光，突出瓶身折射与高级质感，输出一张 4:5 竖图。");
-                                window.requestAnimationFrame(() => inputRef.current?.focus());
+                        {mode === "agent" ? (
+                            <FirstUseGuide
+                                ready={publicSessionReady}
+                                completed={hasAgentConversation || agent.conversations.length > 0}
+                                missingModels={missingModels}
+                                onUseExample={() => {
+                                    setPrompt("为一款透明玻璃香水瓶创作电商主视觉：冷白背景，柔和侧光，突出瓶身折射与高级质感，输出一张 4:5 竖图。");
+                                    window.requestAnimationFrame(() => inputRef.current?.focus());
+                                }}
+                            />
+                        ) : null}
+                        <div className="mt-3 w-full sm:mt-6">{composer}</div>
+                        <CreateWorkbenchOverview
+                            onUseAsset={async (asset) => {
+                                await importRecentAsset(asset);
                             }}
                         />
-                        <div className="mt-3 w-full sm:mt-6">{composer}</div>
-                        <div className="mt-2 flex w-full min-w-0 flex-wrap justify-center gap-1.5 sm:mt-3 sm:gap-2">
-                            {skillsLoading ? <span className="px-2 py-2 text-xs text-[#9aa2ad]">正在加载创作 Skill...</span> : null}
-                            {!skillsLoading && skillsLoadError ? (
-                                <Button size="small" icon={<RefreshCw className="size-3.5" />} onClick={() => setSkillsLoadVersion((version) => version + 1)}>
-                                    重新加载 Skill
-                                </Button>
-                            ) : null}
-                            {skills.map((skill, index) => {
-                                const visual = skillVisual(skill, index);
-                                const Icon = visual.icon;
-                                return (
-                                    <button
-                                        key={skill.id}
-                                        type="button"
-                                        aria-label={`使用 ${skill.name} Skill`}
-                                        title={skill.description}
-                                        className="inline-flex h-9 items-center gap-2 rounded-full border border-[#e3e7eb] bg-white px-3 text-sm font-medium text-[#343b44] transition hover:border-[#cfd6dd] hover:bg-[#f7f8fa] dark:border-[#343a42] dark:bg-[#181b20] dark:text-[#dce1e7] dark:hover:border-[#4a525d] dark:hover:bg-[#20242a]"
-                                        onClick={() => selectSkill(skill)}
-                                    >
-                                        <Icon className={`size-4 ${visual.iconClass}`} />
-                                        <span>{skill.name}</span>
-                                    </button>
-                                );
-                            })}
-                        </div>
-                        <CreateWorkbenchOverview onUseAsset={useRecentAsset} />
                         <CreateInspirationGallery onUsePrompt={usePublicPrompt} onUseImage={usePublicImage} />
                     </div>
                 )}
@@ -347,7 +399,7 @@ export default function CreatePage() {
                 ref={attachmentInputRef}
                 type="file"
                 multiple
-                accept={CREATIVE_UPLOAD_ACCEPT}
+                accept={attachmentAccept(mode)}
                 className="hidden"
                 onChange={(event) => {
                     const files = Array.from(event.target.files || []);
@@ -396,10 +448,67 @@ export default function CreatePage() {
     );
 }
 
-function skillVisual(skill: AgentSkillSummary, index: number) {
-    if (skill.id === "ecommerce-image") return SKILL_VISUALS[0];
-    if (skill.id === "character-design") return SKILL_VISUALS[1];
-    if (skill.id === "image-motion") return SKILL_VISUALS[2];
-    if (skill.id === "drama-planning") return SKILL_VISUALS[3];
-    return { ...SKILL_VISUALS[index % SKILL_VISUALS.length], icon: Sparkles };
+function recentOverviewAssetToCreativeAsset(asset: CreateOverviewAsset, userId: string): CreativeAsset {
+    const createdAt = Date.parse(asset.createdAt) || Date.now();
+    const isRemote = /^https?:\/\//i.test(asset.url);
+    return {
+        id: asset.id,
+        userId,
+        conversationId: "recent-generation",
+        ordinal: 0,
+        type: asset.kind,
+        status: "ready",
+        title: asset.title || `最近${asset.kind === "image" ? "图片" : asset.kind === "video" ? "视频" : "音频"}`,
+        storageKind: isRemote ? "remote" : "local",
+        ...(isRemote ? { remoteUrl: asset.url } : { serverUrl: asset.url }),
+        mimeType: asset.mimeType,
+        metadata: { source: "recent-asset-reference", sourceAssetId: asset.id },
+        createdAt,
+        updatedAt: createdAt,
+    };
+}
+
+function applySkillDefaults(
+    skill: AgentSkillSummary,
+    mode: "image" | "video",
+    updateConfig: (key: "textModel" | "imageModel" | "videoModel" | "quality" | "size" | "count" | "vquality" | "videoSeconds" | "videoGenerateAudio" | "videoWatermark", value: string) => void,
+    setVideoCount: (value: number) => void,
+    setVideoMethod: (value: DirectVideoMethod) => void,
+) {
+    const defaults = skill.defaultConfig || {};
+    if (typeof defaults.size === "string") updateConfig("size", defaults.size);
+    if (mode === "image") {
+        if (typeof defaults.quality === "string") updateConfig("quality", defaults.quality);
+        if (typeof defaults.count === "number" || typeof defaults.count === "string") updateConfig("count", String(defaults.count));
+    } else {
+        if (typeof defaults.vquality === "string") updateConfig("vquality", defaults.vquality);
+        if (typeof defaults.videoSeconds === "number" || typeof defaults.videoSeconds === "string") updateConfig("videoSeconds", String(defaults.videoSeconds));
+        if (skill.requiresReference) setVideoMethod("reference");
+        if (typeof defaults.videoCount === "number") setVideoCount(Math.max(1, Math.min(4, Math.floor(defaults.videoCount))));
+    }
+}
+
+function attachmentAccept(mode: CreationMode) {
+    if (mode === "agent") return CREATIVE_UPLOAD_ACCEPT;
+    if (mode === "video") return "image/*,video/*,audio/*";
+    return "image/*";
+}
+
+function isUploadAllowedForMode(mode: CreationMode, mimeType: string) {
+    if (!isCreativeUploadMimeType(mimeType)) return false;
+    if (mode === "agent") return true;
+    if (mode === "video") return mimeType.startsWith("image/") || mimeType.startsWith("video/") || mimeType.startsWith("audio/");
+    return mimeType.startsWith("image/");
+}
+
+function isAssetAllowedForMode(mode: CreationMode, type: "text" | "image" | "video" | "audio") {
+    if (mode === "agent") return type === "image" || type === "video" || type === "audio";
+    if (mode === "video") return type === "image" || type === "video" || type === "audio";
+    return type === "image";
+}
+
+function attachmentTypeLabel(mode: CreationMode) {
+    if (mode === "video") return "支持的图片、视频或音频格式";
+    if (mode === "agent") return "支持的创作素材格式";
+    return "支持的图片格式";
 }

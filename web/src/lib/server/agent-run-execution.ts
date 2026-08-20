@@ -2,6 +2,8 @@ import { getAuthSettings, refundUserPoints, type LogicalModelCapability } from "
 import { withCreativeFoundation, type CreativeReview } from "@/lib/creative-agent-contract";
 import type { CreativeAsset, CreativeSurface } from "@/lib/creative-runtime-contract";
 import { fetchInternalApi } from "@/lib/server/internal-origin";
+import { resolveDesignResourceForUser } from "@/lib/server/design-resource-resolver";
+import { resolveWorkspaceMediaResourceForUser, type WorkspaceMediaType } from "@/lib/server/workspace-resource-resolver";
 import { resolveLogicalModel } from "@/lib/server/logical-model-router";
 import { reviewCreativeOutputs } from "@/lib/server/creative-review-service";
 import { requestStructuredText, type TextPlanningCandidate } from "@/lib/server/text-planning-runtime";
@@ -17,7 +19,7 @@ import { scheduleGenerationTask } from "@/lib/server/generation-task-scheduler";
 import { linkStoredGenerationTask } from "@/lib/server/generation-task-store";
 import { workerContextHeaders } from "@/lib/server/maintenance-auth";
 import type { AgentFunctionCallResult } from "./agent-function-call";
-import { agentSurfaceImageSize, canvasSnapshotNodes, isMediaReferenceType, resolveAgentTaskRatio, resolveCanvasTaskTargetNodeId } from "./agent-run-task-input";
+import { agentSurfaceImageSize, canvasSnapshotNodes, designAgentTaskTarget, isMediaReferenceType, resolveAgentTaskRatio, resolveCanvasTaskTargetNodeId } from "./agent-run-task-input";
 import { planToOps, taskResultOps } from "./agent-run-canvas-ops";
 import { hasSystemAiCharge, readSystemAiBilling, systemAiBillingHeaders } from "./system-ai-billing";
 
@@ -29,7 +31,7 @@ type AgentCopyOutcome = { index: number; result: unknown; taskId: string; assetI
 
 export async function canContinue(id: string, executionId: string) {
     const run = await getAgentRun(id);
-    return Boolean(run && run.executionId === executionId && !["paused", "cancelled", "completed"].includes(run.status));
+    return Boolean(run && run.executionId === executionId && !["awaiting_confirmation", "paused", "cancelled", "completed"].includes(run.status));
 }
 
 export const agentPlanTool = {
@@ -108,6 +110,66 @@ export const agentPlanTool = {
                 required: ["surface", "title"],
                 additionalProperties: false,
             },
+            workspaceActions: {
+                type: "array",
+                minItems: 0,
+                maxItems: 100,
+                items: {
+                    type: "object",
+                    properties: {
+                        command: {
+                            type: "string",
+                            enum: [
+                                "workspace.read",
+                                "selection.read",
+                                "selection.set",
+                                "viewport.set",
+                                "content.create",
+                                "content.create-frame",
+                                "content.create-element",
+                                "content.update",
+                                "content.delete",
+                                "content.align",
+                                "content.distribute",
+                                "content.reorder",
+                                "relation.create",
+                                "relation.delete",
+                                "asset.insert-image",
+                                "generation.run",
+                            ],
+                        },
+                        label: { type: "string", maxLength: 400 },
+                        targetIds: { type: "array", maxItems: 500, items: { type: "string", maxLength: 160 } },
+                        parameters: {
+                            type: "object",
+                            maxProperties: 30,
+                            additionalProperties: {
+                                anyOf: [
+                                    { type: "string", maxLength: 2000 },
+                                    { type: "number" },
+                                    { type: "boolean" },
+                                    { type: "null" },
+                                    { type: "array", maxItems: 500, items: { type: "string", maxLength: 160 } },
+                                    {
+                                        type: "object",
+                                        properties: {
+                                            kind: { type: "string", enum: ["storage-key", "library-asset"] },
+                                            storageKey: { type: "string", maxLength: 1024 },
+                                            libraryAssetId: { type: "string", maxLength: 160 },
+                                            x: { type: "number" },
+                                            y: { type: "number" },
+                                            width: { type: "number" },
+                                            height: { type: "number" },
+                                        },
+                                    },
+                                ],
+                            },
+                        },
+                    },
+                    required: ["command", "label", "targetIds", "parameters"],
+                    additionalProperties: false,
+                },
+            },
             deliverables: {
                 type: "array",
                 minItems: 0,
@@ -135,7 +197,7 @@ export const agentPlanTool = {
                 },
             },
         },
-        required: ["intent", "objective", "reply", "decisions", "foundation", "deliverables"],
+        required: ["intent", "objective", "reply", "decisions", "foundation", "workspaceActions", "deliverables"],
         additionalProperties: false,
     },
 };
@@ -182,13 +244,17 @@ export function normalizeTasks(
         ] satisfies AgentRunReference[];
         const primaryReference = references[0];
         const referenceContext = selectedAssets.map(creativeAssetContext).join("\n");
+        const designTarget = surface === "design" ? designAgentTaskTarget(snapshot, item.type) : undefined;
+        const stableReferenceLocator = surface === "canvas" && target && isMediaReferenceType(target.type) ? target.resource : designTarget?.referenceLocator;
         return {
             id: item.id?.trim() || `task-${index}`,
             targetNodeId: target ? targetNodeId : undefined,
-            referenceAssetId: selectedAssets[0]?.id,
-            referenceUrl: primaryReference?.url,
-            referenceType: primaryReference?.type,
+            ...(selectedAssets[0]?.id ? { referenceAssetId: selectedAssets[0].id } : {}),
+            ...(primaryReference?.url ? { referenceUrl: primaryReference.url } : {}),
+            ...(primaryReference?.type ? { referenceType: primaryReference.type } : {}),
             references,
+            ...(stableReferenceLocator ? { referenceLocator: stableReferenceLocator } : {}),
+            ...(designTarget ? { binding: designTarget.binding } : {}),
             title: item.title.trim(),
             type: item.type,
             model: resolvePlannedModel(settings, item.type, item.model, lockedModelsByCapability.get(item.type)),
@@ -292,6 +358,7 @@ export function agentPlanFallbackExample(models: ReturnType<typeof agentModelOpt
             },
         },
         brand: { summary: "克制、现代、可信", colors: ["深灰", "暖白"], visualKeywords: ["纪实", "高级", "清晰层次"] },
+        workspaceActions: [],
         deliverables: [
             {
                 id: "main-visual",
@@ -652,9 +719,27 @@ export async function dispatchTask(task: AgentRunTask, origin: string, cookie: s
         ...(task.type === "audio" ? { voice: task.voice || "alloy", format: task.format || "mp3", speed: "1" } : {}),
     };
     const path = task.type === "image" ? "/api/image-tasks" : task.type === "video" ? "/api/video-generation-tasks" : task.type === "audio" ? "/api/audio-tasks" : "/api/text-tasks";
-    const references = taskReferences(task);
+    let references = taskReferences(task);
+    const stableReferenceLocator = task.referenceLocator || (run.surface === "design" ? task.designReferenceLocator : undefined);
+    if (stableReferenceLocator && (run.surface === "canvas" || run.surface === "design")) {
+        const allowedTypes = taskReferenceMediaTypes(task.type);
+        if (allowedTypes.length) {
+            const resource =
+                run.surface === "design" ? { ...(await resolveDesignResourceForUser(run.userId, stableReferenceLocator)), mediaType: "image" as const } : await resolveWorkspaceMediaResourceForUser(run.userId, stableReferenceLocator, allowedTypes);
+            references = mergeTaskReferences(references, [{ url: resource.url, type: resource.mediaType }]);
+        }
+    }
     const source = run.surface === "canvas" ? "canvas" : run.surface === "drama" ? "drama" : "agent";
-    const context = { conversationId: run.conversationId, runId: run.id, surface: run.surface, projectId: run.projectId, parentTaskId: task.id, attemptNo: attempt, clientRequestId: `${run.clientRequestId}:${task.id}:${attempt}` };
+    const context = {
+        conversationId: run.conversationId,
+        runId: run.id,
+        surface: run.surface,
+        projectId: run.projectId,
+        parentTaskId: task.id,
+        attemptNo: attempt,
+        clientRequestId: `${run.clientRequestId}:${task.id}:${attempt}`,
+        ...(task.binding ? { binding: task.binding } : {}),
+    };
     const body =
         task.type === "image"
             ? {
@@ -730,6 +815,13 @@ export async function dispatchTask(task: AgentRunTask, origin: string, cookie: s
     };
 }
 
+function taskReferenceMediaTypes(taskType: AgentRunTask["type"]): readonly WorkspaceMediaType[] {
+    if (taskType === "image") return ["image"];
+    if (taskType === "video") return ["image", "video", "audio"];
+    if (taskType === "audio") return ["audio"];
+    return [];
+}
+
 async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker: (item: T) => Promise<R>): Promise<Array<PromiseSettledResult<R>>> {
     const results: Array<PromiseSettledResult<R>> = new Array(items.length);
     let cursor = 0;
@@ -762,6 +854,7 @@ export function linkAgentChildTask(run: AgentRun, task: AgentRunTask, taskId: st
         projectId: run.projectId,
         parentTaskId: run.id,
         attemptNo: attempt,
+        binding: task.binding,
     });
 }
 

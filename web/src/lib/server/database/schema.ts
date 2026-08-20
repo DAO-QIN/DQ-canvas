@@ -256,16 +256,17 @@ ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS worker_id text;
 ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS lease_until timestamptz;
 ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS last_heartbeat_at timestamptz;
 ALTER TABLE generation_tasks DROP CONSTRAINT IF EXISTS generation_tasks_execution_phase;
-ALTER TABLE generation_tasks ADD CONSTRAINT generation_tasks_execution_phase CHECK (execution_phase IN ('created', 'submitting', 'submitted', 'polling', 'result_ready', 'persisting', 'cancel_requested', 'cancel_polling', 'needs_review', 'review_pending', 'reviewing', 'review_unavailable', 'completed'));
+ALTER TABLE generation_tasks ADD CONSTRAINT generation_tasks_execution_phase CHECK (execution_phase IN ('created', 'submitting', 'submitted', 'polling', 'result_ready', 'persisting', 'awaiting_confirmation', 'cancel_requested', 'cancel_polling', 'needs_review', 'review_pending', 'reviewing', 'review_unavailable', 'completed'));
 
 DROP INDEX IF EXISTS generation_tasks_user_client_request_idx;
 CREATE UNIQUE INDEX generation_tasks_user_client_request_idx ON generation_tasks (user_id, task_type, client_request_id, COALESCE(attempt_no, 0)) WHERE client_request_id IS NOT NULL AND client_request_id <> '';
 CREATE INDEX IF NOT EXISTS generation_tasks_owner_upstream_idx
     ON generation_tasks (user_id, task_type, channel_id, upstream_task_id, updated_at DESC)
     WHERE channel_id IS NOT NULL AND channel_id <> '' AND upstream_task_id IS NOT NULL AND upstream_task_id <> '';
-CREATE UNIQUE INDEX IF NOT EXISTS generation_tasks_image_process_source_active_idx
-    ON generation_tasks (user_id, COALESCE(project_id, ''), (payload->>'sourceNodeId'))
-    WHERE task_type = 'image_process' AND status IN ('pending', 'running') AND COALESCE(payload->>'sourceNodeId', '') <> '';
+DROP INDEX IF EXISTS generation_tasks_image_process_source_active_idx;
+CREATE UNIQUE INDEX generation_tasks_image_process_source_active_idx
+    ON generation_tasks (user_id, COALESCE(project_id, ''), (COALESCE(payload->>'sourceIdentity', CASE WHEN COALESCE(payload->>'sourceNodeId', '') <> '' THEN 'legacy-canvas-node:' || (payload->>'sourceNodeId') ELSE '' END)))
+    WHERE task_type = 'image_process' AND status IN ('pending', 'running') AND COALESCE(payload->>'sourceIdentity', payload->>'sourceNodeId', '') <> '';
 CREATE INDEX IF NOT EXISTS generation_tasks_conversation_idx ON generation_tasks (conversation_id, updated_at DESC) WHERE conversation_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS generation_tasks_run_idx ON generation_tasks (run_id, updated_at DESC) WHERE run_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS generation_tasks_user_project_idx ON generation_tasks (user_id, project_id, task_type, status) WHERE project_id IS NOT NULL;
@@ -318,14 +319,18 @@ CREATE TABLE IF NOT EXISTS creative_conversations (
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     last_message_at timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT creative_conversations_surface CHECK (surface IN ('chat', 'canvas', 'drama')),
-    CONSTRAINT creative_conversations_source CHECK (source IN ('agent', 'image-workbench', 'video-workbench', 'canvas', 'drama')),
+    CONSTRAINT creative_conversations_surface CHECK (surface IN ('chat', 'canvas', 'design', 'drama')),
+    CONSTRAINT creative_conversations_source CHECK (source IN ('agent', 'image-workbench', 'video-workbench', 'canvas', 'design', 'drama')),
     CONSTRAINT creative_conversations_status CHECK (status IN ('active', 'archived'))
 );
 ALTER TABLE creative_conversations ADD COLUMN IF NOT EXISTS context_summary text NOT NULL DEFAULT '';
 ALTER TABLE creative_conversations ADD COLUMN IF NOT EXISTS context_summary_through_sequence integer NOT NULL DEFAULT 0;
 ALTER TABLE creative_conversations ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'agent';
-UPDATE creative_conversations SET source = surface WHERE surface IN ('canvas', 'drama') AND source = 'agent';
+ALTER TABLE creative_conversations DROP CONSTRAINT IF EXISTS creative_conversations_surface;
+ALTER TABLE creative_conversations ADD CONSTRAINT creative_conversations_surface CHECK (surface IN ('chat', 'canvas', 'design', 'drama'));
+ALTER TABLE creative_conversations DROP CONSTRAINT IF EXISTS creative_conversations_source;
+ALTER TABLE creative_conversations ADD CONSTRAINT creative_conversations_source CHECK (source IN ('agent', 'image-workbench', 'video-workbench', 'canvas', 'design', 'drama'));
+UPDATE creative_conversations SET source = surface WHERE surface IN ('canvas', 'design', 'drama') AND source = 'agent';
 
 CREATE INDEX IF NOT EXISTS creative_conversations_user_updated_idx ON creative_conversations (user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS creative_conversations_user_source_idx ON creative_conversations (user_id, surface, source, status, updated_at DESC);
@@ -478,10 +483,106 @@ CREATE TABLE IF NOT EXISTS canvas_projects (
     title text NOT NULL,
     project_json jsonb NOT NULL DEFAULT '{}'::jsonb,
     created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now()
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (user_id, id)
 );
 
 CREATE INDEX IF NOT EXISTS canvas_projects_user_updated_idx ON canvas_projects (user_id, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS canvas_projects_user_id_id_idx ON canvas_projects (user_id, id);
+
+CREATE TABLE IF NOT EXISTS canvas_project_save_receipts (
+    project_id text NOT NULL,
+    user_id text NOT NULL,
+    batch_id text NOT NULL,
+    fingerprint text NOT NULL,
+    base_revision bigint NOT NULL,
+    result_revision bigint NOT NULL,
+    receipt_json jsonb NOT NULL,
+    created_at timestamptz NOT NULL,
+    PRIMARY KEY (project_id, batch_id),
+    FOREIGN KEY (user_id, project_id) REFERENCES canvas_projects(user_id, id) ON DELETE CASCADE,
+    CHECK (base_revision >= 0),
+    CHECK (result_revision >= base_revision),
+    CHECK (fingerprint ~ '^sha256:[0-9a-f]{64}$')
+);
+
+CREATE INDEX IF NOT EXISTS canvas_project_save_receipts_user_project_created_idx ON canvas_project_save_receipts (user_id, project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS design_projects (
+    id text PRIMARY KEY,
+    user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title text NOT NULL,
+    status text NOT NULL DEFAULT 'active',
+    revision bigint NOT NULL DEFAULT 0,
+    document_json jsonb NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    UNIQUE (user_id, id),
+    CHECK (status IN ('active', 'archived')),
+    CHECK (revision >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS design_projects_user_status_updated_idx ON design_projects (user_id, status, updated_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS design_project_versions (
+    id text PRIMARY KEY,
+    project_id text NOT NULL,
+    user_id text NOT NULL,
+    version bigint NOT NULL,
+    snapshot_revision bigint NOT NULL,
+    reason text NOT NULL DEFAULT '',
+    snapshot_json jsonb NOT NULL,
+    created_at timestamptz NOT NULL,
+    FOREIGN KEY (user_id, project_id) REFERENCES design_projects(user_id, id) ON DELETE CASCADE,
+    UNIQUE (project_id, version),
+    CHECK (version > 0),
+    CHECK (snapshot_revision >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS design_project_versions_user_project_version_idx ON design_project_versions (user_id, project_id, version DESC);
+
+CREATE TABLE IF NOT EXISTS design_operation_receipts (
+    project_id text NOT NULL,
+    user_id text NOT NULL,
+    batch_id text NOT NULL,
+    fingerprint text NOT NULL,
+    base_revision bigint NOT NULL,
+    result_revision bigint NOT NULL,
+    receipt_json jsonb NOT NULL,
+    created_at timestamptz NOT NULL,
+    PRIMARY KEY (project_id, batch_id),
+    FOREIGN KEY (user_id, project_id) REFERENCES design_projects(user_id, id) ON DELETE CASCADE,
+    CHECK (base_revision >= 0),
+    CHECK (result_revision >= base_revision),
+    CHECK (fingerprint ~ '^sha256:[0-9a-f]{64}$')
+);
+
+CREATE INDEX IF NOT EXISTS design_operation_receipts_user_project_created_idx ON design_operation_receipts (user_id, project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS workspace_handoffs (
+    user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    handoff_id text NOT NULL,
+    fingerprint text NOT NULL,
+    status text NOT NULL DEFAULT 'pending',
+    request_json jsonb NOT NULL,
+    target_batch_id text,
+    target_fingerprint text,
+    receipt_json jsonb,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    PRIMARY KEY (user_id, handoff_id),
+    CHECK (fingerprint ~ '^sha256:[0-9a-f]{64}$'),
+    CHECK (
+        (target_batch_id IS NULL AND target_fingerprint IS NULL)
+        OR (target_batch_id IS NOT NULL AND target_fingerprint ~ '^sha256:[0-9a-f]{64}$')
+    ),
+    CHECK (status IN ('pending', 'completed'))
+);
+
+ALTER TABLE workspace_handoffs ADD COLUMN IF NOT EXISTS target_batch_id text;
+ALTER TABLE workspace_handoffs ADD COLUMN IF NOT EXISTS target_fingerprint text;
+
+CREATE INDEX IF NOT EXISTS workspace_handoffs_user_updated_idx ON workspace_handoffs (user_id, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS library_assets (
     id text PRIMARY KEY,
@@ -1014,6 +1115,6 @@ DROP TRIGGER IF EXISTS object_storage_settings_set_updated_at ON object_storage_
 CREATE TRIGGER object_storage_settings_set_updated_at BEFORE UPDATE ON object_storage_settings FOR EACH ROW EXECUTE FUNCTION dq_set_updated_at();
 
 INSERT INTO schema_migrations (version)
-VALUES ('20260709_postgresql_commercial_base'), ('20260709_billing_foundation'), ('20260709_billing_checkout'), ('20260709_commercial_seed_products'), ('20260709_dq_table_prefix'), ('20260711_generation_tasks'), ('20260716_billing_reconciliation'), ('20260725_account_deletion_requests'), ('20260726_promotion_coupon_commerce'), ('20260727_referral_growth_rewards'), ('20260727_work_publications'), ('20260727_work_community'), ('20260728_user_blocks')
+VALUES ('20260709_postgresql_commercial_base'), ('20260709_billing_foundation'), ('20260709_billing_checkout'), ('20260709_commercial_seed_products'), ('20260709_dq_table_prefix'), ('20260711_generation_tasks'), ('20260716_billing_reconciliation'), ('20260725_account_deletion_requests'), ('20260726_promotion_coupon_commerce'), ('20260727_referral_growth_rewards'), ('20260727_work_publications'), ('20260727_work_community'), ('20260728_user_blocks'), ('20260811_design_projects_v1')
 ON CONFLICT (version) DO NOTHING;
 `;

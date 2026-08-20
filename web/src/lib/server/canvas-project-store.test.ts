@@ -10,7 +10,8 @@ vi.mock("@/lib/server/data-adapter", () => ({
     writeJsonDataFile: vi.fn(async (name: string, value: unknown) => mocks.files.set(name, structuredClone(value))),
 }));
 
-import { createCanvasProject, deleteCanvasProjects, getCanvasProject, getLatestCanvasProjectOverview, listCanvasProjects, listCanvasProjectSummaries, updateCanvasProject } from "./canvas-project-store";
+import { createCanvasProject, deleteCanvasProjects, getCanvasProject, getLatestCanvasProjectOverview, listCanvasProjects, listCanvasProjectSummaries, saveCanvasProject, updateCanvasProject } from "./canvas-project-store";
+import { canvasSaveFingerprint } from "@/lib/canvas-project-receipt";
 
 describe("canvas project file provider", () => {
     beforeEach(() => {
@@ -36,7 +37,7 @@ describe("canvas project file provider", () => {
     it("returns file-provider summaries without changing stored project details", async () => {
         await createCanvasProject("user-one", { ...project("one", "项目一"), nodes: [{ id: "node-one" }] as CanvasProject["nodes"] });
 
-        await expect(listCanvasProjectSummaries("user-one")).resolves.toMatchObject([{ id: "one", title: "项目一", nodeCount: 1, connectionCount: 0 }]);
+        await expect(listCanvasProjectSummaries("user-one")).resolves.toMatchObject([{ id: "one", title: "项目一", revision: 0, nodeCount: 1, connectionCount: 0 }]);
         await expect(getCanvasProject("one", "user-one")).resolves.toMatchObject({ nodes: [{ id: "node-one" }] });
     });
 
@@ -68,6 +69,7 @@ describe("canvas project file provider", () => {
                 {
                     id: "canvas-one",
                     title: "画布一",
+                    revision: 7,
                     source_handoff_id: "handoff-one",
                     creative_conversation_id: "conversation-one",
                     node_count: 8,
@@ -80,7 +82,7 @@ describe("canvas project file provider", () => {
             ],
         });
 
-        await expect(listCanvasProjectSummaries("user-one")).resolves.toMatchObject([{ id: "canvas-one", nodeCount: 8, connectionCount: 3, preview: { kind: "video", url: "/api/media/preview.mp4" } }]);
+        await expect(listCanvasProjectSummaries("user-one")).resolves.toMatchObject([{ id: "canvas-one", revision: 7, nodeCount: 8, connectionCount: 3, preview: { kind: "video", url: "/api/media/preview.mp4" } }]);
         const [statement, params] = mocks.postgresQuery.mock.calls[0] as [string, unknown[]];
         expect(statement).toContain("jsonb_array_length");
         expect(statement).toContain("LEFT JOIN LATERAL");
@@ -123,6 +125,34 @@ describe("canvas project file provider", () => {
         await createCanvasProject("user-one", latest);
 
         await expect(getLatestCanvasProjectOverview("user-one")).resolves.toMatchObject({ id: "latest", nodeCount: 1, connectionCount: 1, previews: [{ kind: "image", url: "/api/media/latest.webp" }] });
+    });
+
+    it("applies one save batch, replays it without another revision, and rejects a different fingerprint", async () => {
+        const current = project("receipt", "Receipt");
+        await createCanvasProject("user-one", current);
+        const request = { project: { ...current, title: "Saved" }, expectedRevision: 0, batchId: "batch-one", fingerprint: canvasSaveFingerprint({ ...current, title: "Saved" }, 0) };
+
+        const applied = await saveCanvasProject("user-one", request);
+        expect(applied).toMatchObject({ project: { revision: 1, title: "Saved" }, receipt: { status: "applied", resultRevision: 1 } });
+
+        const replayed = await saveCanvasProject("user-one", request);
+        expect(replayed).toMatchObject({ project: { revision: 1, title: "Saved" }, receipt: { status: "replayed", originalStatus: "applied" } });
+
+        const conflict = await saveCanvasProject("user-one", { ...request, fingerprint: canvasSaveFingerprint({ ...current, title: "Other" }, 0) });
+        expect(conflict).toMatchObject({ project: { revision: 1, title: "Saved" }, receipt: { status: "conflict", error: { code: "CANVAS_BATCH_ID_CONFLICT" } } });
+
+        await deleteCanvasProjects("user-one", [current.id]);
+        const database = mocks.files.get("canvas-projects.json") as { receipts: unknown[] };
+        expect(database.receipts).toEqual([]);
+    });
+
+    it("rejects a stale revision without changing the stored project", async () => {
+        const current = project("stale", "Stale");
+        await createCanvasProject("user-one", current);
+        const first = { project: { ...current, title: "First" }, expectedRevision: 0, batchId: "batch-first", fingerprint: canvasSaveFingerprint({ ...current, title: "First" }, 0) };
+        await saveCanvasProject("user-one", first);
+        const stale = { project: { ...current, title: "Stale writer" }, expectedRevision: 0, batchId: "batch-stale", fingerprint: canvasSaveFingerprint({ ...current, title: "Stale writer" }, 0) };
+        await expect(saveCanvasProject("user-one", stale)).resolves.toMatchObject({ project: { revision: 1, title: "First" }, receipt: { status: "conflict", error: { code: "CANVAS_REVISION_CONFLICT" } } });
     });
 
     it("uses one bounded PostgreSQL projection instead of returning project_json", async () => {

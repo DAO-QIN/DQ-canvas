@@ -248,6 +248,19 @@ curl -fsS -X POST \
 
 宝塔使用“计划任务 -> Shell 脚本”，Docker 可使用宿主机 Cron，云部署使用平台 Scheduler。接口采用同一令牌和幂等批处理，不依赖单机进程定时器；未配置令牌时维护接口保持关闭。系统超时关闭的订单在支付商确认真实付款后仍可安全完成开通，管理员手动关闭的订单不会被重新打开。
 
+## 设计画板与共享工作台灰度
+
+以下公开变量仅控制 Design 和 Canvas 的共享工作台布局。它们会在 Next.js 构建时写入客户端产物，默认值均为 `0`；改变运行中容器的环境变量或只重启进程不会切换布局。
+
+```dotenv
+NEXT_PUBLIC_DQ_CREATIVE_WORKSPACE_DESIGN_ENABLED=0
+NEXT_PUBLIC_DQ_CREATIVE_WORKSPACE_CANVAS_ENABLED=0
+```
+
+只有精确值 `1` 启用对应 Surface：先保持两个值都为 `0` 留存旧布局，再只启用 Design，确认历史项目打开、保存恢复、图片派生和 Frame 导出后，再启用 Canvas。任一 Surface 出现保存错误、重复计费、历史项目打不开或刷新丢失时，使用上一稳定产物或仅关闭受影响的开关回滚。两个 Surface 使用独立领域文档和存储契约，切换开关不执行数据库迁移或项目转换。
+
+线上灰度与回滚的完整步骤见[设计画板与共享工作台](/docs/progress/design-board)。
+
 ## 配置检查顺序
 
 1. `/install` 显示 PostgreSQL 与 schema 正常。

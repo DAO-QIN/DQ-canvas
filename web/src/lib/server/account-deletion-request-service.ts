@@ -12,6 +12,8 @@ import {
     withdrawPendingAccountDeletionRequest,
 } from "@/lib/server/database/account-deletion-request-repository";
 
+export const ACCOUNT_DELETION_REQUEST_MODE = "manual-review-request-only" as const;
+
 export class AccountDeletionRequestError extends Error {
     constructor(
         message: string,

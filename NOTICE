@@ -1,5 +1,41 @@
 DQ-绘图
 
+Portions of the shared creative-workspace layout and responsive interaction
+patterns are adapted from:
+
+  Asui Canvas
+  https://github.com/Asai2080/asui-canvas
+  Source revision reviewed: 5e11c353b47fe82bdc9962bf4658005fdc873b38
+  Copyright (c) 2026 Asui Canvas contributors
+  License: MIT License
+
+The adapted DQ implementation uses DQ theme tokens and editor adapters. It
+does not import Asui's tldraw store, shapes, or persistence implementation.
+
+The MIT License for Asui Canvas follows:
+
+MIT License
+
+Copyright (c) 2026 Asui Canvas contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 Portions of the Canvas image-node annotation, emotion editing, portrait
 texture, canvas locking, and multi-angle workflows are adapted from:
 

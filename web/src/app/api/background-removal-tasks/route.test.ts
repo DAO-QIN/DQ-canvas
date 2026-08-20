@@ -4,9 +4,13 @@ const mocks = vi.hoisted(() => ({
     currentUser: vi.fn(),
     readJsonBody: vi.fn(),
     getCanvasProjectForUser: vi.fn(),
+    getDesignProjectForUser: vi.fn(),
+    validateWorkspaceMediaResourceForUser: vi.fn(),
     getStoredGenerationTaskByRequest: vi.fn(),
     getActiveStoredGenerationTaskBySourceNode: vi.fn(),
     getLatestStoredGenerationTaskBySourceNode: vi.fn(),
+    getActiveStoredGenerationTaskBySourceIdentity: vi.fn(),
+    getLatestStoredGenerationTaskBySourceIdentity: vi.fn(),
     isBackgroundRemovalProviderEnabled: vi.fn(),
     readRegisteredImageBytes: vi.fn(),
     checkGenerationRateLimit: vi.fn(),
@@ -19,6 +23,8 @@ vi.mock("@/lib/auth/request", () => ({ readJsonBody: mocks.readJsonBody }));
 vi.mock("@/lib/auth/store", () => ({ isAuthInputError: vi.fn(() => false) }));
 vi.mock("@/lib/auth/session", () => ({ getCurrentUser: mocks.currentUser }));
 vi.mock("@/lib/server/canvas-project-service", () => ({ getCanvasProjectForUser: mocks.getCanvasProjectForUser }));
+vi.mock("@/lib/server/design-project-service", () => ({ getDesignProjectForUser: mocks.getDesignProjectForUser }));
+vi.mock("@/lib/server/workspace-resource-resolver", () => ({ validateWorkspaceMediaResourceForUser: mocks.validateWorkspaceMediaResourceForUser }));
 vi.mock("@/lib/server/background-removal-task-store", () => ({
     createBackgroundRemovalTaskWithResult: mocks.createBackgroundRemovalTaskWithResult,
     publicBackgroundRemovalTask: mocks.publicBackgroundRemovalTask,
@@ -26,6 +32,8 @@ vi.mock("@/lib/server/background-removal-task-store", () => ({
 vi.mock("@/lib/server/generation-task-store", () => ({
     getLatestStoredGenerationTaskBySourceNode: mocks.getLatestStoredGenerationTaskBySourceNode,
     getActiveStoredGenerationTaskBySourceNode: mocks.getActiveStoredGenerationTaskBySourceNode,
+    getLatestStoredGenerationTaskBySourceIdentity: mocks.getLatestStoredGenerationTaskBySourceIdentity,
+    getActiveStoredGenerationTaskBySourceIdentity: mocks.getActiveStoredGenerationTaskBySourceIdentity,
     getStoredGenerationTaskByRequest: mocks.getStoredGenerationTaskByRequest,
 }));
 vi.mock("@/lib/server/background-removal-provider", () => ({ isBackgroundRemovalProviderEnabled: mocks.isBackgroundRemovalProviderEnabled }));
@@ -47,9 +55,13 @@ describe("POST /api/background-removal-tasks", () => {
         mocks.currentUser.mockResolvedValue({ id: "user-one", role: "user" });
         mocks.readJsonBody.mockResolvedValue(requestBody());
         mocks.getCanvasProjectForUser.mockResolvedValue(project());
+        mocks.getDesignProjectForUser.mockResolvedValue(designProject());
+        mocks.validateWorkspaceMediaResourceForUser.mockResolvedValue({ storageKey: "permanent/source.png", mediaType: "image", mimeType: "image/png" });
         mocks.getStoredGenerationTaskByRequest.mockResolvedValue(null);
         mocks.getActiveStoredGenerationTaskBySourceNode.mockResolvedValue(null);
         mocks.getLatestStoredGenerationTaskBySourceNode.mockResolvedValue(null);
+        mocks.getActiveStoredGenerationTaskBySourceIdentity.mockResolvedValue(null);
+        mocks.getLatestStoredGenerationTaskBySourceIdentity.mockResolvedValue(null);
         mocks.isBackgroundRemovalProviderEnabled.mockReturnValue(true);
         mocks.readRegisteredImageBytes.mockResolvedValue(source());
         mocks.checkGenerationRateLimit.mockResolvedValue({ allowed: true, remaining: 29, resetAt: Date.now() + 60_000 });
@@ -371,6 +383,79 @@ describe("POST /api/background-removal-tasks", () => {
         );
         expect((await response.json()).data.task).toMatchObject({ id: "task-one" });
     });
+
+    it("validates a Design element, version and locator before creating a bound task", async () => {
+        const body = designRequestBody();
+        mocks.readJsonBody.mockResolvedValue(body);
+
+        const response = await POST(request(body));
+
+        expect(response.status).toBe(200);
+        expect(mocks.getCanvasProjectForUser).not.toHaveBeenCalled();
+        expect(mocks.getDesignProjectForUser).toHaveBeenCalledWith("user-one", "design-one");
+        expect(mocks.validateWorkspaceMediaResourceForUser).toHaveBeenCalledWith("user-one", { kind: "library-asset", libraryAssetId: "asset-library-one" }, ["image"]);
+        expect(mocks.createBackgroundRemovalTaskWithResult).toHaveBeenCalledWith(
+            expect.objectContaining({
+                surface: "design",
+                projectId: "design-one",
+                sourceIdentity: "design-element:design-one:element-one:version-one",
+                sourceElementId: "element-one",
+                sourceAssetVersionId: "version-one",
+                sourceLocator: { kind: "library-asset", libraryAssetId: "asset-library-one" },
+                binding: {
+                    surface: "design",
+                    projectId: "design-one",
+                    baseRevision: 4,
+                    target: { scope: "frame", frameId: "frame-one" },
+                    elementId: "element-one",
+                    assetVersionId: "version-one",
+                },
+            }),
+        );
+        expect(mocks.getActiveStoredGenerationTaskBySourceIdentity).toHaveBeenCalledWith("image_process", "user-one", "design-element:design-one:element-one:version-one", "design-one");
+        expect(mocks.getActiveStoredGenerationTaskBySourceNode).not.toHaveBeenCalled();
+    });
+
+    it("resolves the permanent source key from a Design library locator", async () => {
+        const body = designRequestBody();
+        delete (body as { sourceStorageKey?: string }).sourceStorageKey;
+        mocks.readJsonBody.mockImplementationOnce((request: Request) => request.json());
+
+        const response = await POST(
+            new Request("http://localhost/api/background-removal-tasks", {
+                method: "POST",
+                headers: { "content-type": "application/json", cookie: "session=one" },
+                body: JSON.stringify(body),
+            }),
+        );
+
+        expect(response.status).toBe(200);
+        expect(mocks.validateWorkspaceMediaResourceForUser).toHaveBeenCalledWith("user-one", { kind: "library-asset", libraryAssetId: "asset-library-one" }, ["image"]);
+        expect(mocks.readRegisteredImageBytes).toHaveBeenCalledWith({ storageKey: "permanent/source.png", ownerUserId: "user-one" });
+        expect(mocks.createBackgroundRemovalTaskWithResult).toHaveBeenCalledWith(expect.objectContaining({ sourceStorageKey: "permanent/source.png" }));
+    });
+
+    it("rejects a forged Design storage key before reading image bytes", async () => {
+        const body = designRequestBody({ sourceStorageKey: "permanent/forged.png" });
+        mocks.readJsonBody.mockResolvedValue(body);
+
+        const response = await POST(request(body));
+
+        expect(response.status).toBe(404);
+        expect(mocks.readRegisteredImageBytes).not.toHaveBeenCalled();
+        expect(mocks.createBackgroundRemovalTaskWithResult).not.toHaveBeenCalled();
+    });
+
+    it("rejects a stale Design asset version before resolving media", async () => {
+        const body = designRequestBody({ context: { ...designRequestBody().context, sourceAssetVersionId: "version-old" } });
+        mocks.readJsonBody.mockResolvedValue(body);
+
+        const response = await POST(request(body));
+
+        expect(response.status).toBe(404);
+        expect(mocks.validateWorkspaceMediaResourceForUser).not.toHaveBeenCalled();
+        expect(mocks.createBackgroundRemovalTaskWithResult).not.toHaveBeenCalled();
+    });
 });
 
 function request(bodyPatch: Record<string, unknown> = {}) {
@@ -388,11 +473,39 @@ function requestBody() {
     };
 }
 
+function designRequestBody(patch: Record<string, unknown> = {}) {
+    return {
+        sourceStorageKey: "permanent/source.png",
+        context: {
+            surface: "design",
+            projectId: "design-one",
+            sourceElementId: "element-one",
+            sourceAssetVersionId: "version-one",
+            sourceLocator: { kind: "library-asset", libraryAssetId: "asset-library-one" },
+            clientRequestId: "design-cutout-one",
+        },
+        ...patch,
+    };
+}
+
 function project(patch: Record<string, unknown> = {}) {
     return {
         id: "project-one",
         nodes: [{ id: "node-one", metadata: { storageKey: "permanent/source.png" } }],
         ...patch,
+    };
+}
+
+function designProject() {
+    return {
+        id: "design-one",
+        revision: 4,
+        document: {
+            revision: 4,
+            frames: [{ id: "frame-one" }],
+            elements: [{ id: "element-one", kind: "image", frameId: "frame-one", assetVersionId: "version-one" }],
+            assetVersions: [{ id: "version-one", locator: { kind: "library-asset", libraryAssetId: "asset-library-one" } }],
+        },
     };
 }
 

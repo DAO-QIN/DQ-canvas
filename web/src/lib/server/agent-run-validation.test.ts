@@ -16,6 +16,36 @@ describe("validateAgentPlan", () => {
         expect(() => validateAgentPlan({ intent: "generation", objective: "建立项目", projectHandoff: { surface: "drama", title: "" }, deliverables: [] })).toThrow("项目交接参数无效");
     });
 
+    it("accepts workspace-only plans and rejects workspace actions in conversation", () => {
+        expect(() =>
+            validateAgentPlan({
+                intent: "generation",
+                objective: "移动主图",
+                workspaceActions: [{ command: "content.update", label: "移动主图", targetIds: ["node-one"], parameters: { position: { x: 20, y: 30 } } }],
+                deliverables: [],
+            }),
+        ).not.toThrow();
+        expect(() =>
+            validateAgentPlan({
+                intent: "conversation",
+                objective: "回答",
+                reply: "已完成",
+                workspaceActions: [{ command: "content.delete", label: "删除", targetIds: ["node-one"], parameters: {} }],
+                deliverables: [],
+            }),
+        ).toThrow("对话结果无效");
+    });
+
+    it("rejects model-controlled workspace action identities", () => {
+        expect(() =>
+            validateAgentPlan({
+                objective: "移动主图",
+                workspaceActions: [{ command: "content.update", label: "移动", targetIds: ["node-one"], parameters: {}, effect: "read" }],
+                deliverables: [],
+            }),
+        ).toThrow("不受信任字段");
+    });
+
     it("rejects empty and oversized plans", () => {
         expect(() => validateAgentPlan({ objective: "", deliverables: [] })).toThrow();
         expect(() => validateAgentPlan({ objective: "批量生成", deliverables: Array.from({ length: 51 }, (_, index) => ({ title: String(index), type: "image", prompt: "图" })) })).toThrow();

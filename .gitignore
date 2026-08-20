@@ -6,8 +6,14 @@ node_modules/
 .playwright-cli/
 web/.e2e-data/
 web/.e2e-artifacts/
+web/.asui-*/
+web/.data-*/
+web/.e2e-*/
+web/.next-*/
+web/.phase4*/
 web/.trace-*/
 web/playwright-report/
+web/package-lock.json
 output/
 .env*
 !.env.example

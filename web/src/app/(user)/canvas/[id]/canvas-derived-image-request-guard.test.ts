@@ -28,9 +28,13 @@ describe("canvas derived image request guard", () => {
         const ticket = beginCanvasDerivedImageRequest(requests, "project", "annotation", source)!;
 
         expect(currentCanvasDerivedImageSource(requests, ticket, "project", [])).toBeNull();
-        expect(currentCanvasDerivedImageSource(requests, ticket, "project", [imageNode({ content: "/replacement.png" })])).toBeNull();
+        expect(currentCanvasDerivedImageSource(requests, ticket, "project", [imageNode({ content: "/signed/source.png?token=refreshed" })])).not.toBeNull();
         expect(currentCanvasDerivedImageSource(requests, ticket, "project", [imageNode({ storageKey: "permanent/replacement.png" })])).toBeNull();
         expect(currentCanvasDerivedImageSource(requests, ticket, "other-project", [source])).toBeNull();
+
+        const transient = imageNode({ storageKey: undefined, content: "blob:source" });
+        const transientTicket = beginCanvasDerivedImageRequest(requests, "project", "crop", transient)!;
+        expect(currentCanvasDerivedImageSource(requests, transientTicket, "project", [imageNode({ storageKey: undefined, content: "blob:replacement" })])).toBeNull();
     });
 
     it("releases the matching request without clearing a replacement token", () => {
@@ -43,6 +47,20 @@ describe("canvas derived image request guard", () => {
         requests.set(ticket.key, replacement);
         finishCanvasDerivedImageRequest(requests, ticket);
         expect(requests.get(ticket.key)).toBe(replacement);
+    });
+
+    it("allows a second sibling annotation after the first request finishes", () => {
+        const requests = new Map<string, symbol>();
+        const source = imageNode();
+        const first = beginCanvasDerivedImageRequest(requests, "project", "annotation", source)!;
+
+        expect(beginCanvasDerivedImageRequest(requests, "project", "annotation", source)).toBeNull();
+        finishCanvasDerivedImageRequest(requests, first);
+
+        const second = beginCanvasDerivedImageRequest(requests, "project", "annotation", source);
+        expect(second).not.toBeNull();
+        expect(second?.token).not.toBe(first.token);
+        expect(currentCanvasDerivedImageSource(requests, second!, "project", [source])).toBe(source);
     });
 });
 

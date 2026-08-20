@@ -7,8 +7,12 @@ import { getStoredGenerationTask, listStoredGenerationTasks } from "./generation
 import { cancelledRunCanvasOps, taskCanvasEventOps } from "./agent-run-canvas-ops";
 import { agentRequirementAcknowledgement } from "@/lib/agent-requirement-acknowledgement";
 import { agentTaskCompletionMessage } from "./agent-run-messages";
+import type { WorkspaceActionReceipt, WorkspaceActionRequest } from "@/lib/creative-workspace";
+import type { DesignSurfaceBinding, SurfaceBinding, WorkspaceStableResourceLocator } from "@/lib/creative-workspace";
+import type { DesignStableResourceLocator } from "@/lib/design";
+import { selectedCanvasNodeIds } from "./agent-canvas-snapshot";
 
-export type AgentRunStatus = "planning" | "running" | "paused" | "completed" | "failed" | "cancelled";
+export type AgentRunStatus = "planning" | "running" | "awaiting_confirmation" | "paused" | "completed" | "failed" | "cancelled";
 export type AgentRunReviewStatus = "review_pending" | "reviewing" | "review_completed" | "review_unavailable";
 export type AgentRunReference = {
     assetId?: string;
@@ -30,6 +34,10 @@ export type AgentRunTask = {
     referenceUrl?: string;
     referenceType?: "image" | "video" | "audio";
     references?: AgentRunReference[];
+    binding?: SurfaceBinding;
+    referenceLocator?: WorkspaceStableResourceLocator;
+    /** Legacy Design runs used a surface-specific field. New runs use referenceLocator. */
+    designReferenceLocator?: DesignStableResourceLocator;
     title: string;
     type: "text" | "image" | "video" | "audio";
     model?: string;
@@ -70,6 +78,8 @@ export type AgentRun = {
     status: AgentRunStatus;
     executionId?: string;
     tasks: AgentRunTask[];
+    workspaceActionRequest?: WorkspaceActionRequest;
+    workspaceActionReceipt?: WorkspaceActionReceipt;
     foundation?: CreativeFoundation;
     projectHandoff?: CreativeProjectHandoffPlan;
     projectHandoffEmitted?: boolean;
@@ -91,7 +101,7 @@ export type AgentRunTimings = {
     reviewCompletedAt?: number;
     runCompletedAt?: number;
 };
-const TTL = 365 * 24 * 60 * 60 * 1000;
+export const AGENT_RUN_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 
 export async function createAgentRun(userId: string, input: CreativeRunRequest) {
     const now = Date.now();
@@ -106,7 +116,7 @@ export async function createAgentRun(userId: string, input: CreativeRunRequest) 
         inputMessageId: `message-${nanoid()}`,
         assistantMessageId: `message-${nanoid()}`,
         prompt: input.prompt,
-        snapshot: input.snapshot,
+        snapshot: persistedRunSnapshot(input.surface, input.snapshot),
         referencedAssetIds: input.assetIds,
         selectedSkillIds: input.skillIds,
         ...(input.modelIds.length ? { requestedModelIds: input.modelIds } : {}),
@@ -127,13 +137,16 @@ export async function createAgentRun(userId: string, input: CreativeRunRequest) 
         title: input.prompt.slice(0, 48),
         assetIds: input.assetIds,
         acknowledgement: agentRequirementAcknowledgement(input.prompt, input.surface, input.assetIds.length > 0 || selectedCanvasNodeIds(input.snapshot).length > 0),
-        ttlMs: TTL,
+        ttlMs: AGENT_RUN_TTL_MS,
     });
 }
 
-function selectedCanvasNodeIds(snapshot: unknown) {
-    const ids = snapshot && typeof snapshot === "object" ? (snapshot as { selectedNodeIds?: unknown }).selectedNodeIds : undefined;
-    return Array.isArray(ids) ? ids.filter((id) => typeof id === "string" && id.trim()) : [];
+function persistedRunSnapshot(surface: CreativeSurface, snapshot: unknown) {
+    if (surface !== "canvas" && surface !== "design") return snapshot;
+    const source = snapshot && typeof snapshot === "object" && !Array.isArray(snapshot) ? (snapshot as Record<string, unknown>) : {};
+    const candidates = Array.isArray(source.selectionIds) ? source.selectionIds : Array.isArray(source.selectedNodeIds) ? source.selectedNodeIds : [];
+    const selectionIds = Array.from(new Set(candidates.filter((id): id is string => typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9_:.\/-]{0,159}$/.test(id.trim())).map((id) => id.trim()))).slice(0, 500);
+    return Object.freeze({ selectionIds });
 }
 
 export const getAgentRun = (id: string) => getStoredGenerationTask<AgentRun>("agent", id);
@@ -145,7 +158,7 @@ export async function getAgentRunByClientRequestId(userId: string, clientRequest
 export async function setAgentRunStatus(run: AgentRun, status: AgentRunStatus) {
     return mutateCreativeRun<AgentRun>(
         run.id,
-        TTL,
+        AGENT_RUN_TTL_MS,
         (current) => {
             if (current.userId !== run.userId || current.status !== run.status) return null;
             const tasks = status === "cancelled" ? cancelActiveTasks(current.tasks) : current.tasks;
@@ -175,14 +188,33 @@ function cancelActiveTasks(tasks: AgentRunTask[]) {
 
 export async function updateAgentRunById(
     id: string,
-    patch: Partial<Pick<AgentRun, "status" | "executionId" | "tasks" | "foundation" | "projectHandoff" | "projectHandoffEmitted" | "review" | "reviewed" | "reviewStatus" | "reviewAttempts" | "assetIds" | "timings">>,
+    patch: Partial<
+        Pick<
+            AgentRun,
+            | "status"
+            | "executionId"
+            | "snapshot"
+            | "tasks"
+            | "workspaceActionRequest"
+            | "workspaceActionReceipt"
+            | "foundation"
+            | "projectHandoff"
+            | "projectHandoffEmitted"
+            | "review"
+            | "reviewed"
+            | "reviewStatus"
+            | "reviewAttempts"
+            | "assetIds"
+            | "timings"
+        >
+    >,
     event?: { type: string; data?: unknown },
     allowedStatuses?: AgentRunStatus[],
     expectedExecutionId?: string,
 ) {
     return mutateCreativeRun<AgentRun>(
         id,
-        TTL,
+        AGENT_RUN_TTL_MS,
         (current) => {
             const next = { ...current, ...patch, status: patch.status || current.status };
             return { run: next, event, assistant: assistantUpdate(next, event) };
@@ -195,7 +227,7 @@ export async function updateAgentRunById(
 export async function updateAgentRunTaskById(id: string, taskId: string, patch: Partial<AgentRunTask>, eventType: string, expectedExecutionId: string) {
     return mutateCreativeRun<AgentRun>(
         id,
-        TTL,
+        AGENT_RUN_TTL_MS,
         (current) => {
             const tasks = current.tasks.map((task) => (task.id === taskId ? mergeAgentTaskPatch(task, patch) : task));
             const taskIndex = tasks.findIndex((item) => item.id === taskId);

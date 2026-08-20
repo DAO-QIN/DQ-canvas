@@ -43,7 +43,7 @@ export async function runBackgroundRemovalTaskStep(task: BackgroundRemovalTask):
         if (!(await updateBackgroundRemovalTask(running.id, { progressStage: savingProgress.stage, progress: savingProgress.progress }))) return { state: "cancelled" };
         const asset = await writePersistentReferenceImageBuffer(output.bytes, {
             ownerUserId: running.userId,
-            source: "canvas",
+            source: running.surface === "design" ? "design" : "canvas",
             originalName: "background-removed.png",
             taskId: running.id,
             projectId: running.projectId,

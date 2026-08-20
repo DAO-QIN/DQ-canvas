@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentRun } from "./agent-run-store";
+import { normalizeTaskStatus } from "./creative-runtime-repository";
 
 const mocks = vi.hoisted(() => ({ createCreativeRunBundle: vi.fn(), mutateCreativeRun: vi.fn() }));
 
@@ -30,6 +31,34 @@ describe("createAgentRun", () => {
         });
 
         expect(mocks.createCreativeRunBundle).toHaveBeenCalledWith("user", expect.objectContaining({ run: expect.objectContaining({ requestedAgentModelId: "planner-pro", requestedModelIds: ["image-pro"] }) }));
+    });
+
+    it("persists only selection hints for workspace runs and drops client media payloads", async () => {
+        mocks.createCreativeRunBundle.mockImplementation(async (_userId, input) => input.run);
+
+        const created = await createAgentRun("user", {
+            clientRequestId: "canvas-request",
+            surface: "canvas",
+            projectId: "canvas-one",
+            prompt: "编辑当前图片",
+            snapshot: {
+                selectedNodeIds: ["image-one"],
+                nodes: [{ id: "image-one", metadata: { dataUrl: "data:image/png;base64,secret", serverUrl: "/api/reference-assets/image.png?signature=secret" } }],
+                connections: [],
+            },
+            assetIds: [],
+            skillIds: [],
+            modelIds: [],
+        });
+
+        expect(created).toMatchObject({ snapshot: { selectionIds: ["image-one"] } });
+        expect(JSON.stringify(created)).not.toMatch(/data:image|reference-assets|signature|nodes|connections/);
+    });
+});
+
+describe("Agent Run status persistence", () => {
+    it("keeps workspace confirmation waits pending without consuming a running status", () => {
+        expect(normalizeTaskStatus("awaiting_confirmation")).toBe("pending");
     });
 });
 

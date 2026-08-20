@@ -18,7 +18,7 @@ vi.mock("@/lib/server/database/account-deletion-request-repository", () => ({
     reviewPendingAccountDeletionRequest: mocks.review,
 }));
 
-import { reviewAccountDeletionRequest, submitAccountDeletionRequest, withdrawOwnAccountDeletionRequest } from "./account-deletion-request-service";
+import { ACCOUNT_DELETION_REQUEST_MODE, reviewAccountDeletionRequest, submitAccountDeletionRequest, withdrawOwnAccountDeletionRequest } from "./account-deletion-request-service";
 
 const user = { id: "user-one", accountId: "0001", username: "creator", displayName: "创作者", email: "creator@example.com" };
 const stored = {
@@ -36,6 +36,10 @@ const stored = {
 };
 
 describe("account deletion request service", () => {
+    it("declares that approval records a manual-review decision rather than deleting user data", () => {
+        expect(ACCOUNT_DELETION_REQUEST_MODE).toBe("manual-review-request-only");
+    });
+
     beforeEach(() => {
         vi.clearAllMocks();
         mocks.readLatest.mockResolvedValue(null);

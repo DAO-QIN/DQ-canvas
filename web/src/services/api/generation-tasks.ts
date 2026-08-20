@@ -1,38 +1,8 @@
-import type { BackgroundRemovalOptionsV1 } from "@/lib/background-removal-options";
-import type { BackgroundRemovalProgressStage } from "@/lib/background-removal-progress";
+import type { CanvasGenerationTask, CreativeWorkspaceGenerationTaskStatus } from "@/lib/creative-workspace/generation-task";
 import { cancelBackgroundRemovalTask } from "@/services/api/background-removal";
 
-export type CanvasGenerationTaskStatus = "queued" | "running" | "paused" | "succeeded" | "failed" | "cancelled";
-
-export type CanvasGenerationTask = {
-    id: string;
-    type: string;
-    status: CanvasGenerationTaskStatus;
-    progress?: number;
-    stage?: string;
-    prompt?: string;
-    model?: string;
-    kind?: "generation" | "edit";
-    provider?: "openai" | "seedance" | "generation";
-    pollPath?: string;
-    serverTaskId?: string;
-    durationSeconds?: number;
-    sourceStorageKey?: string;
-    options?: BackgroundRemovalOptionsV1;
-    optionsHash?: string;
-    progressStage?: BackgroundRemovalProgressStage;
-    projectId?: string;
-    sourceNodeId?: string;
-    /** The canvas node that receives this task's result. */
-    targetNodeId?: string;
-    executionPhase?: string;
-    upstreamTaskId?: string;
-    lastUpstreamStatus?: string;
-    error?: string;
-    billing?: { pointsCost: number; refunded?: boolean };
-    createdAt: number;
-    updatedAt: number;
-};
+export type { CanvasGenerationTask, CreativeWorkspaceGenerationTask, CreativeWorkspaceGenerationTaskStatus } from "@/lib/creative-workspace/generation-task";
+export type CanvasGenerationTaskStatus = CreativeWorkspaceGenerationTaskStatus;
 
 type GenerationTasksResponse = {
     code?: number;
@@ -40,14 +10,18 @@ type GenerationTasksResponse = {
     tasks?: CanvasGenerationTask[];
 };
 
-export async function listCanvasGenerationTasks(projectId: string, options?: { activeOnly?: boolean; limit?: number; signal?: AbortSignal }) {
-    const query = new URLSearchParams({ surface: "canvas", projectId });
+export async function listCreativeWorkspaceGenerationTasks(surface: "canvas" | "design", projectId: string, options?: { activeOnly?: boolean; limit?: number; signal?: AbortSignal }) {
+    const query = new URLSearchParams({ surface, projectId });
     if (options?.activeOnly !== undefined) query.set("activeOnly", String(options.activeOnly));
     if (options?.limit !== undefined) query.set("limit", String(options.limit));
     const response = await fetch(`/api/generation-tasks?${query.toString()}`, { cache: "no-store", signal: options?.signal });
     const payload = (await response.json().catch(() => ({}))) as GenerationTasksResponse & { msg?: string; error?: string };
     if (!response.ok) throw new Error(payload.msg || payload.error || "获取生成任务失败");
     return payload.data?.tasks || payload.tasks || [];
+}
+
+export function listCanvasGenerationTasks(projectId: string, options?: { activeOnly?: boolean; limit?: number; signal?: AbortSignal }) {
+    return listCreativeWorkspaceGenerationTasks("canvas", projectId, options);
 }
 
 const CANVAS_TASK_CANCEL_PATHS: Record<string, string> = {

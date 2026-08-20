@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
     listPointRecordsPage: vi.fn(),
     listPrompts: vi.fn(),
     listCanvasProjects: vi.fn(),
+    readDesignProjectArchive: vi.fn(),
     listCreativeAssets: vi.fn(),
     listCreativeConversations: vi.fn(),
     listCreativeMessages: vi.fn(),
@@ -22,6 +23,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/auth/store", () => ({ getPublicUsersByIds: mocks.getPublicUsersByIds, listPointRecordsPage: mocks.listPointRecordsPage }));
 vi.mock("@/lib/prompts/store", () => ({ listPrompts: mocks.listPrompts }));
 vi.mock("@/lib/server/canvas-project-store", () => ({ listCanvasProjects: mocks.listCanvasProjects }));
+vi.mock("@/lib/server/design-project-store", () => ({ readDesignProjectArchive: mocks.readDesignProjectArchive }));
 vi.mock("@/lib/server/creative-runtime-store", () => ({
     listCreativeAssets: mocks.listCreativeAssets,
     listCreativeConversations: mocks.listCreativeConversations,
@@ -48,6 +50,7 @@ describe("buildUserDataExport", () => {
         mocks.listPointRecordsPage.mockResolvedValue({ records: [], total: 0 });
         mocks.listPrompts.mockResolvedValue({ items: [], total: 0 });
         mocks.listCanvasProjects.mockResolvedValue([]);
+        mocks.readDesignProjectArchive.mockResolvedValue({ version: 1, projects: [], versions: [], receipts: [] });
         mocks.listCreativeConversations.mockResolvedValue([]);
         mocks.listCreativeAssets.mockResolvedValue([]);
         mocks.listCreativeMessages.mockResolvedValue([]);
@@ -113,6 +116,21 @@ describe("buildUserDataExport", () => {
         });
         mocks.listLocalMediaRegistrationsForUser.mockResolvedValue([{ storageKey: "user/image.png", ownerUserId: "user-one", externalObjectKey: "private/object.png", type: "image", source: "agent" }]);
         mocks.getOwnAccountDeletionRequest.mockResolvedValue({ id: "delete-one", status: "pending", note: "不再使用", reviewNote: "", requestedAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" });
+        mocks.readDesignProjectArchive.mockResolvedValue({
+            version: 1,
+            projects: [
+                {
+                    id: "design-one",
+                    title: "画板",
+                    document: {
+                        id: "design-one",
+                        assetVersions: [{ id: "version-current", locator: { kind: "storage-key", storageKey: "permanent/design.png" }, metadata: { planningPrompt: "hidden" } }],
+                    },
+                },
+            ],
+            versions: [{ id: "snapshot-one", projectId: "design-one", snapshot: { id: "design-one", previewUrl: "data:image/png;base64,AAAA" } }],
+            receipts: [{ projectId: "design-one", replay: { receipt: { batchId: "batch-one", providerResponse: { secret: true } } } }],
+        });
 
         const result = await buildUserDataExport("user-one");
 
@@ -132,6 +150,14 @@ describe("buildUserDataExport", () => {
         expect(result.generationLogs[0]).not.toHaveProperty("username");
         expect((result.generationLogs[0] as { assets: unknown[] }).assets[0]).not.toHaveProperty("remoteUrl");
         expect(result.media[0]).not.toHaveProperty("externalObjectKey");
+        expect(result.designProjects).toMatchObject({
+            projects: [{ id: "design-one", document: { assetVersions: [{ locator: { kind: "storage-key", storageKey: "permanent/design.png" } }] } }],
+            versions: [{ id: "snapshot-one", snapshot: { id: "design-one" } }],
+            receipts: [{ replay: { receipt: { batchId: "batch-one" } } }],
+        });
+        expect(JSON.stringify(result.designProjects)).not.toContain("planningPrompt");
+        expect(JSON.stringify(result.designProjects)).not.toContain("providerResponse");
+        expect(JSON.stringify(result.designProjects)).not.toContain("base64");
         expect(result.accountDeletionRequest).toMatchObject({ id: "delete-one", status: "pending" });
     });
 

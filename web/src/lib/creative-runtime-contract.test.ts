@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { CreativeRuntimeInputError, isCreativeProjectHandoff, normalizeCreativeRunRequest } from "./creative-runtime-contract";
+import { CreativeRuntimeInputError, creativeConversationSourceForSurface, creativeConversationSources, creativeSurfaces, isCreativeConversationSourceCompatible, isCreativeProjectHandoff, normalizeCreativeRunRequest } from "./creative-runtime-contract";
 
 describe("normalizeCreativeRunRequest", () => {
     it("normalizes a chat request and deduplicates assets", () => {
@@ -30,8 +30,9 @@ describe("normalizeCreativeRunRequest", () => {
         expect(normalizeCreativeRunRequest({ ...validChatRequest(), agentModelId: "   " }).agentModelId).toBeUndefined();
     });
 
-    it("requires projects for canvas and drama", () => {
+    it("requires projects for canvas, design and drama", () => {
         expect(() => normalizeCreativeRunRequest({ clientRequestId: "x", surface: "canvas", prompt: "draw" })).toThrow("画布标识不能为空");
+        expect(() => normalizeCreativeRunRequest({ clientRequestId: "x", surface: "design", prompt: "draw" })).toThrow("画板标识不能为空");
         expect(() => normalizeCreativeRunRequest({ clientRequestId: "x", surface: "drama", prompt: "write" })).toThrow("短剧项目标识不能为空");
     });
 
@@ -65,6 +66,41 @@ describe("isCreativeProjectHandoff", () => {
                 assets: [],
             }),
         ).toBe(true);
+        expect(
+            isCreativeProjectHandoff({
+                id: "handoff-design",
+                sourceRunId: "run-one",
+                conversationId: "conversation-one",
+                surface: "design",
+                title: "设计画板",
+                summary: "P5 前不开放",
+                assetIds: [],
+                assets: [],
+            }),
+        ).toBe(false);
         expect(isCreativeProjectHandoff({ id: "handoff-one", surface: "canvas", title: "品牌画布", assets: [] })).toBe(false);
+    });
+});
+
+describe("creative conversation surface/source contract", () => {
+    it("keeps Design first-class without advertising its P5 handoff", () => {
+        expect(creativeSurfaces).toEqual(["chat", "canvas", "design", "drama"]);
+        expect(creativeConversationSources).toEqual(["agent", "image-workbench", "video-workbench", "canvas", "design", "drama"]);
+        expect(creativeConversationSourceForSurface("design")).toBe("design");
+    });
+
+    it.each([
+        ["chat", "agent", true],
+        ["chat", "image-workbench", true],
+        ["chat", "video-workbench", true],
+        ["chat", "design", false],
+        ["canvas", "canvas", true],
+        ["canvas", "agent", false],
+        ["design", "design", true],
+        ["design", "canvas", false],
+        ["design", "agent", false],
+        ["drama", "drama", true],
+    ] as const)("matches %s with %s: %s", (surface, source, expected) => {
+        expect(isCreativeConversationSourceCompatible(surface, source)).toBe(expected);
     });
 });

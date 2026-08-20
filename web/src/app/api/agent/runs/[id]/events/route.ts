@@ -62,7 +62,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
                     }
                     const snapshotVersion = `${current.status}:${current.updatedAt}`;
                     if (snapshotVersion !== lastSnapshotVersion) {
-                        controller.enqueue(encoder.encode(`event: run.snapshot\ndata: ${JSON.stringify({ id: current.id, status: current.status, tasks: current.tasks, timings: current.timings, updatedAt: current.updatedAt })}\n\n`));
+                        controller.enqueue(
+                            encoder.encode(
+                                `event: run.snapshot\ndata: ${JSON.stringify({ id: current.id, status: current.status, tasks: current.tasks, workspaceActionRequest: current.workspaceActionRequest, workspaceActionReceipt: current.workspaceActionReceipt, timings: current.timings, updatedAt: current.updatedAt })}\n\n`,
+                            ),
+                        );
                         lastSnapshotVersion = snapshotVersion;
                     }
                     if (["completed", "failed", "cancelled"].includes(current.status)) {

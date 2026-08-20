@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { directAgentPlan, normalizeTasks, planToOps, readFunctionCallResult, taskResultOps } from "./agent-run-execution";
-import { agentSurfaceImageSize, normalizeCanvasPlanForSelection, resolveAgentTaskRatio } from "./agent-run-task-input";
+import { agentSurfaceImageSize, designAgentTaskTarget, normalizeCanvasPlanForSelection, resolveAgentTaskRatio } from "./agent-run-task-input";
 
 describe("directAgentPlan", () => {
     it("使用用户指定的媒体模型创建单任务计划", () => {
@@ -183,6 +183,50 @@ describe("directAgentPlan", () => {
         const [task] = normalizeTasks(plan as never, [], generationSettings() as never, snapshot, "中国辣妹", "canvas", []);
 
         expect(task).toMatchObject({ ratio: "1824x1024", targetNodeId: "reference", referenceUrl: "/api/reference-assets/reference.webp" });
+    });
+
+    it("derives a Design image binding and persists only its stable locator", () => {
+        const snapshot = {
+            schemaVersion: 1 as const,
+            surface: "design" as const,
+            projectId: "design-one",
+            title: "商品主图",
+            revision: 7,
+            selectionIds: ["element-product"],
+            entities: [
+                { id: "frame-main", kind: "frame", name: "主画框", bounds: { x: 0, y: 0, width: 1200, height: 1200 } },
+                {
+                    id: "element-product",
+                    kind: "image",
+                    name: "商品",
+                    parentId: "frame-main",
+                    bounds: { x: 100, y: 120, width: 800, height: 800 },
+                    resource: { kind: "storage-key" as const, storageKey: "users/user/design/product.png" },
+                },
+            ],
+            relations: [],
+            truncated: false,
+        };
+        const plan = {
+            intent: "generation",
+            objective: "把商品换成夏日版本",
+            reply: "开始生成",
+            decisions: [],
+            foundation: { complexity: "simple", brief: { objective: "夏日商品图" }, direction: { summary: "保持当前构图" } },
+            deliverables: [{ id: "hero", title: "夏日商品图", type: "image", model: "image-pro", prompt: "夏日清爽商品主图", count: 1, dependencies: [] }],
+        };
+
+        expect(designAgentTaskTarget(snapshot, "image")).toEqual({
+            binding: { surface: "design", projectId: "design-one", baseRevision: 7, target: { scope: "frame", frameId: "frame-main" }, elementId: "element-product" },
+            referenceLocator: { kind: "storage-key", storageKey: "users/user/design/product.png" },
+        });
+        const [task] = normalizeTasks(plan as never, [], generationSettings() as never, snapshot, "把商品换成夏日版本", "design", []);
+        expect(task).toMatchObject({
+            binding: { surface: "design", projectId: "design-one", baseRevision: 7, target: { scope: "frame", frameId: "frame-main" }, elementId: "element-product" },
+            referenceLocator: { kind: "storage-key", storageKey: "users/user/design/product.png" },
+        });
+        expect(task).not.toHaveProperty("designReferenceLocator");
+        expect(JSON.stringify(task)).not.toMatch(/https?:|blob:|data:|reference-assets/);
     });
 
     it("选中提示词节点时原位改写且不创建图片或计划节点", () => {

@@ -1,0 +1,46 @@
+---
+title: 设计画板与共享工作台
+description: Design、Canvas 共享布局的实现边界、验证状态、灰度和回滚说明
+---
+
+# 设计画板与共享工作台
+
+DQ-绘图新增独立的 `/design` 平面设计项目域，并让 `/design/[id]` 与 `/canvas/[id]` 复用同一套创作工作台外壳。当前本地生产 Gate 已通过，线上灰度尚未执行。
+
+## 已完成能力
+
+- Design 项目支持无限 Workspace、多固定尺寸 Frame、图片、文字和基础图形、图层、裁剪、对齐、吸附、历史、AI 图片派生、版本恢复与保存恢复。
+- Design 使用 `DesignDocument + Design Ops + Fabric Adapter`；Canvas 保持 Node/Connection Store 与 Canvas Agent Ops。二者共用布局和创作基础设施，但不共享文档、历史、渲染或保存契约。
+- Design 在 PostgreSQL 与文件 Provider 下都执行用户归属、revision 乐观锁、操作回执、版本和级联删除语义。资源、素材和生成结果会先通过归属校验再写入文档。
+- Frame 导出支持 PNG、JPEG、WebP、1x-4x、透明/白色/Frame 背景、单项下载和多项 ZIP + `manifest.json`。资源解析、revision、MIME、编码或像素预算失败时不会生成不完整包。
+- 共享工作台覆盖 Top Bar、Tool/Zoom Dock、Right Rail、生成 Composer、任务恢复、素材选择、Agent 动作与 Design/Canvas 跨 Surface Handoff。
+
+## 当前验证状态
+
+| 项目 | 结果 |
+| --- | --- |
+| Design 持久化、版本、资源归属和导出契约 | 已通过本地自动化验证 |
+| 全量 Vitest 与 TypeScript | 已通过本地 Gate |
+| 隔离 production build、响应式与 Chromium 工作区流程 | 已通过本地 Gate |
+| 真实外部文本、图片、视频模型 | 本轮未通过，三次均为 HTTP 401 |
+| 线上灰度 | 尚未执行 |
+
+本地 Gate 不能替代线上可用性结论。外部模型凭据恢复后，应分别验证生成、轮询、媒体回写、计费和失败退款。
+
+## 灰度与回滚
+
+以下变量在构建时固化，默认关闭：
+
+```dotenv
+NEXT_PUBLIC_DQ_CREATIVE_WORKSPACE_DESIGN_ENABLED=0
+NEXT_PUBLIC_DQ_CREATIVE_WORKSPACE_CANVAS_ENABLED=0
+```
+
+先保留两个变量均为 `0` 的稳定产物，再只启用 Design；在保存、刷新、AI 结果恢复和 Frame 导出稳定后，才启用 Canvas。若出现数据写入错误、重复计费、历史项目打不开或刷新后丢失，关闭受影响 Surface 或回到上一稳定产物。布局切换不迁移数据库，也不删除项目数据。
+
+## 详细证据
+
+- [实施状态](https://github.com/DAO-QIN/DQ-canvas/blob/main/docs/progress/design-board/implementation-status.md)
+- [最终 Gate 报告](https://github.com/DAO-QIN/DQ-canvas/blob/main/docs/progress/design-board/p6-final-gate-report.md)
+- [灰度与回滚](https://github.com/DAO-QIN/DQ-canvas/blob/main/docs/progress/design-board/p6-rollout-and-rollback.md)
+- [架构决策](https://github.com/DAO-QIN/DQ-canvas/blob/main/docs/progress/design-board/architecture-decisions.md)

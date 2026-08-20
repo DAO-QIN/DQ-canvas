@@ -72,6 +72,15 @@ export type CanvasDrawingDocument = {
 type CanvasNodeStatus = "idle" | "success" | "loading" | "error" | "cancelled";
 export type CanvasGenerationMode = "text" | "image" | "video" | "audio";
 export type CanvasImageGenerationType = "generation" | "edit";
+export type CanvasDerivedImageOperation = "annotation" | "crop" | "split" | "mask-edit" | "remove-background" | "refine-background" | "upscale" | "portrait-texture" | "angle" | "emotion";
+
+export type CanvasDerivedImageProvenance = {
+    operation: CanvasDerivedImageOperation;
+    sourceNodeId: string;
+    sourceStorageKey?: string;
+    /** Opaque media identity; lets resumed tasks reject a replaced source without persisting transient URLs. */
+    sourceFingerprint: string;
+};
 
 export type CameraControlOptions = {
     enabled: boolean;
@@ -171,9 +180,11 @@ export type CanvasNodeMetadata = {
     bytes?: number;
     /** Local upload replacement is in flight; never persisted as a generation task. */
     mediaReplacing?: boolean;
-    derivedOperation?: "remove-background" | "refine-background";
+    derivedOperation?: CanvasDerivedImageOperation;
     sourceNodeId?: string;
     sourceStorageKey?: string;
+    /** Structured provenance for all image derivatives. Flat fields above remain for legacy background-removal chains. */
+    derivedImageProvenance?: CanvasDerivedImageProvenance;
     backgroundRemovalOptions?: BackgroundRemovalOptionsV1;
     backgroundRemovalOptionsHash?: string;
     /** Persisted server task that is resumed after reopening the canvas. */

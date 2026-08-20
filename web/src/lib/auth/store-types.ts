@@ -147,7 +147,7 @@ export type SystemDefaultModels = {
     audioModel: string;
 };
 
-export type AgentSkillWorkspace = "image" | "video" | "canvas" | "drama";
+export type AgentSkillWorkspace = "image" | "video" | "canvas" | "design" | "drama";
 
 export type AgentSkill = {
     id: string;

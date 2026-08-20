@@ -1,0 +1,371 @@
+.tray {
+    position: absolute;
+    z-index: 120;
+    top: 72px;
+    right: 12px;
+    width: min(340px, calc(100vw - 24px));
+    overflow: hidden;
+    pointer-events: auto;
+    color: var(--creative-workspace-foreground);
+    border: 1px solid var(--creative-workspace-panel-border);
+    border-radius: 16px;
+    background: var(--creative-workspace-panel);
+    box-shadow: var(--creative-workspace-panel-shadow);
+    backdrop-filter: blur(18px);
+}
+
+.srOnly {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    margin: -1px;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.summary,
+.taskButton {
+    width: 100%;
+    color: inherit;
+    border: 0;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+}
+
+.summary {
+    display: flex;
+    min-height: 48px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 12px;
+}
+
+.summary:hover,
+.taskButton:hover {
+    background: var(--creative-workspace-control-hover);
+}
+
+.summary:focus-visible,
+.taskButton:focus-visible {
+    outline: 2px solid var(--creative-workspace-focus);
+    outline-offset: -2px;
+}
+
+.summaryIdentity,
+.summaryState,
+.taskHeading,
+.metrics span,
+.detailRow {
+    display: flex;
+    align-items: center;
+}
+
+.summaryIdentity,
+.taskHeading {
+    min-width: 0;
+    gap: 8px;
+}
+
+.summaryState {
+    flex: 0 0 auto;
+    gap: 8px;
+    color: var(--creative-workspace-active-foreground);
+}
+
+.summaryIcon,
+.taskIcon {
+    display: grid;
+    flex: 0 0 auto;
+    place-items: center;
+    border-radius: 9px;
+    background: var(--creative-workspace-active);
+}
+
+.summaryIcon {
+    width: 32px;
+    height: 32px;
+}
+
+.taskIcon {
+    width: 28px;
+    height: 28px;
+}
+
+.summaryCopy,
+.taskCopy {
+    display: block;
+    min-width: 0;
+}
+
+.summaryTitle,
+.summaryDetail,
+.taskTitle,
+.taskStage {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.summaryTitle {
+    font-size: 14px;
+    font-weight: 650;
+    line-height: 20px;
+}
+
+.summaryDetail,
+.taskStage,
+.progressLabel,
+.metrics,
+.details {
+    color: var(--creative-workspace-muted);
+}
+
+.summaryDetail {
+    max-width: 230px;
+    font-size: 11px;
+}
+
+.spinner {
+    animation: task-tray-spin 900ms linear infinite;
+}
+
+.taskList {
+    max-height: min(70vh, 520px);
+    padding: 0 10px 10px;
+    overflow-y: auto;
+}
+
+.taskCard {
+    overflow: hidden;
+    margin-top: 8px;
+    border: 1px solid var(--creative-workspace-panel-border);
+    border-radius: 12px;
+    background: var(--creative-workspace-rail);
+}
+
+.taskButton {
+    display: block;
+    padding: 12px;
+}
+
+.taskCopy {
+    flex: 1 1 auto;
+}
+
+.taskTitle {
+    font-size: 12px;
+    font-weight: 650;
+}
+
+.taskStage {
+    margin-top: 4px;
+    font-size: 11px;
+}
+
+.statusBadge {
+    flex: 0 0 auto;
+    padding: 2px 6px;
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 600;
+}
+
+.progressTrack {
+    display: block;
+    height: 4px;
+    margin-top: 12px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--creative-workspace-control-hover);
+}
+
+.progressValue {
+    position: relative;
+    display: block;
+    height: 100%;
+    overflow: hidden;
+    border-radius: inherit;
+    transition: width 300ms;
+}
+
+.progressIndeterminate {
+    width: 40%;
+    animation: task-tray-progress 1.1s ease-in-out infinite;
+}
+
+.progressShimmer {
+    position: absolute;
+    inset: 0;
+    animation: task-tray-shimmer 1.5s ease-in-out infinite;
+    background: linear-gradient(90deg, transparent, rgb(255 255 255 / 45%), transparent);
+}
+
+.progressLabel {
+    display: block;
+    margin-top: 6px;
+    font-size: 10px;
+    text-align: right;
+}
+
+.milestones {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 4px;
+    padding: 0;
+    margin: 8px 0 0;
+    color: var(--creative-workspace-muted);
+    font-size: 9px;
+    list-style: none;
+    text-align: center;
+}
+
+.metrics {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 8px;
+    font-size: 10px;
+}
+
+.metrics span {
+    min-width: 0;
+    gap: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.metrics span:last-child {
+    justify-content: flex-end;
+}
+
+.details {
+    padding: 8px 12px 12px;
+    border-top: 1px solid var(--creative-workspace-panel-border);
+    font-size: 11px;
+}
+
+.prompt,
+.error,
+.notice,
+.taskId {
+    margin: 0 0 8px;
+    overflow-wrap: anywhere;
+}
+
+.prompt {
+    color: var(--creative-workspace-foreground);
+}
+
+.error {
+    margin-top: 8px;
+    color: var(--creative-workspace-danger);
+}
+
+.notice {
+    padding: 7px 8px;
+    color: var(--creative-workspace-warning);
+    border: 1px solid color-mix(in srgb, var(--creative-workspace-warning) 38%, transparent);
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--creative-workspace-warning) 9%, transparent);
+    line-height: 16px;
+}
+
+.actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.actionButton {
+    display: inline-flex;
+    min-height: 28px;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 0 10px;
+    color: var(--creative-workspace-active-foreground);
+    border: 1px solid var(--creative-workspace-panel-border);
+    border-radius: 7px;
+    background: var(--creative-workspace-active);
+    cursor: pointer;
+    font: inherit;
+    font-weight: 600;
+}
+
+.actionDanger {
+    color: var(--creative-workspace-danger);
+    background: transparent;
+}
+
+.actionButton:disabled {
+    cursor: not-allowed;
+    opacity: 0.48;
+}
+
+.taskId {
+    margin-top: 8px;
+    margin-bottom: 0;
+    overflow: hidden;
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.detailRow {
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.detailRow span:last-child {
+    max-width: 210px;
+    overflow: hidden;
+    color: var(--creative-workspace-foreground);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+@keyframes task-tray-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes task-tray-progress {
+    0% {
+        transform: translateX(-100%);
+    }
+    50% {
+        transform: translateX(150%);
+    }
+    100% {
+        transform: translateX(350%);
+    }
+}
+
+@keyframes task-tray-shimmer {
+    0%,
+    100% {
+        transform: translateX(-100%);
+    }
+    50% {
+        transform: translateX(100%);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .spinner,
+    .progressIndeterminate,
+    .progressShimmer {
+        animation: none;
+    }
+}

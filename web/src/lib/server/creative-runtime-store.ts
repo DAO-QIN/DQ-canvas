@@ -82,22 +82,25 @@ export async function createCreativeConversation(userId: string, input: { surfac
     return conversation;
 }
 
-export async function listCreativeConversations(userId: string, input: { surface?: CreativeSurface; source?: CreativeConversationSource; status?: CreativeConversation["status"]; limit?: number; offset?: number } = {}) {
+export async function listCreativeConversations(userId: string, input: { surface?: CreativeSurface; source?: CreativeConversationSource; projectId?: string; status?: CreativeConversation["status"]; limit?: number; offset?: number } = {}) {
     const limit = boundedLimit(input.limit, 50);
     const offset = Math.max(0, Math.floor(Number(input.offset) || 0));
     if (getDatabaseProvider() === "postgres") {
         await ensurePostgresSchema();
         const result = await postgresQuery(
             `SELECT * FROM creative_conversations
-             WHERE user_id = $1 AND ($2::text IS NULL OR surface = $2) AND ($3::text IS NULL OR source = $3) AND ($4::text IS NULL OR status = $4)
-             ORDER BY updated_at DESC, id ASC LIMIT $5 OFFSET $6`,
-            [userId, input.surface || null, input.source || null, input.status || null, limit, offset],
+             WHERE user_id = $1 AND ($2::text IS NULL OR surface = $2) AND ($3::text IS NULL OR source = $3) AND ($4::text IS NULL OR project_id = $4) AND ($5::text IS NULL OR status = $5)
+             ORDER BY updated_at DESC, id ASC LIMIT $6 OFFSET $7`,
+            [userId, input.surface || null, input.source || null, input.projectId || null, input.status || null, limit, offset],
         );
         return result.rows.map(mapConversation);
     }
     const db = await readRuntimeFile();
     return db.conversations
-        .filter((item) => item.userId === userId && (!input.surface || item.surface === input.surface) && (!input.source || item.source === input.source) && (!input.status || item.status === input.status))
+        .filter(
+            (item) =>
+                item.userId === userId && (!input.surface || item.surface === input.surface) && (!input.source || item.source === input.source) && (!input.projectId || item.projectId === input.projectId) && (!input.status || item.status === input.status),
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt)
         .slice(offset, offset + limit);
 }

@@ -15,4 +15,16 @@ describe("CanvasNodePromptPanel composition", () => {
         expect(source).not.toContain("canReplaceMedia");
         expect(source).not.toContain("<Upload");
     });
+
+    it("adapts the same Canvas generation semantics into the shared workspace composer", () => {
+        expect(source).toContain('variant?: "node" | "workspace"');
+        expect(source).toContain("<WorkspaceGenerationComposer");
+        expect(source).toContain("capability={mode}");
+        expect(source).toContain("onGenerate(node.id, mode, text)");
+        expect(source).toContain("onStop={() => onStop(node.id)}");
+        expect(source).toContain("<CanvasResourceMentionTextarea");
+        expect(source).toContain("<CanvasPromptLibrary");
+        expect(source).toContain("requestCreditCost");
+        expect(source).toContain("onAddReferenceFiles(node.id, files)");
+    });
 });

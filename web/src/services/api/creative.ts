@@ -20,6 +20,11 @@ export function listCreativeConversationPage(input: { source?: CreativeConversat
     return request<{ conversations: CreativeConversation[]; hasMore: boolean }>(`/api/creative/conversations?${query}`);
 }
 
+export function listProjectCreativeConversations(input: { surface: "canvas" | "design" | "drama"; projectId: string; offset?: number; limit?: number }) {
+    const query = new URLSearchParams({ surface: input.surface, source: input.surface, projectId: input.projectId, status: "active", limit: String(input.limit || 50), offset: String(input.offset || 0) });
+    return request<{ conversations: CreativeConversation[]; hasMore: boolean }>(`/api/creative/conversations?${query}`);
+}
+
 export function listCreativeConversations(source: CreativeConversationSource = "agent") {
     return listCreativeConversationPage({ source, limit: 100 }).then((data) => data.conversations);
 }
@@ -57,7 +62,7 @@ export function listCreativeAssetPage(conversationId: string, input: { ids?: str
     });
 }
 
-export function createCreativeConversation(input: { surface: "chat" | "canvas" | "drama"; source?: CreativeConversation["source"]; projectId?: string; title?: string }) {
+export function createCreativeConversation(input: { surface: "chat" | "canvas" | "design" | "drama"; source?: CreativeConversation["source"]; projectId?: string; title?: string }) {
     return request<{ conversation: CreativeConversation }>("/api/creative/conversations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -70,6 +75,14 @@ export function uploadCreativeAsset(conversationId: string, file: File) {
     body.set("conversationId", conversationId);
     body.set("file", file);
     return request<{ asset: CreativeAsset }>("/api/creative/assets", { method: "POST", body }).then((data) => data.asset);
+}
+
+export function referenceCreativeAsset(conversationId: string, input: { id: string; type: "image" | "video" | "audio"; url: string; mimeType?: string; title?: string }) {
+    return request<{ asset: CreativeAsset }>("/api/creative/assets/reference", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversationId, ...input }),
+    }).then((data) => data.asset);
 }
 
 export function createCreativeAgentRun(input: CreativeRunRequest) {

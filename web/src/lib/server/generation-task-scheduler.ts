@@ -1,7 +1,8 @@
 import { getDatabaseProvider, ensurePostgresSchema, postgresQuery, withPostgresTransaction } from "@/lib/server/database";
 import { withGenerationTaskFileMutation, type GenerationTaskType, type StoredGenerationTaskRecord } from "@/lib/server/generation-task-store";
 
-export type GenerationTaskExecutionPhase = "created" | "submitting" | "submitted" | "polling" | "result_ready" | "persisting" | "cancel_requested" | "cancel_polling" | "needs_review" | "review_pending" | "reviewing" | "review_unavailable" | "completed";
+export type GenerationTaskExecutionPhase =
+    "created" | "submitting" | "submitted" | "polling" | "result_ready" | "persisting" | "awaiting_confirmation" | "cancel_requested" | "cancel_polling" | "needs_review" | "review_pending" | "reviewing" | "review_unavailable" | "completed";
 
 export type GenerationTaskLease = Pick<
     StoredGenerationTaskRecord,
@@ -420,6 +421,7 @@ function isPhase(value: unknown): value is GenerationTaskExecutionPhase {
         value === "polling" ||
         value === "result_ready" ||
         value === "persisting" ||
+        value === "awaiting_confirmation" ||
         value === "cancel_requested" ||
         value === "cancel_polling" ||
         value === "needs_review" ||

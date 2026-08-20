@@ -1,11 +1,22 @@
 import type { CanvasProject, CanvasProjectSummary, CanvasProjectSummaryPage } from "@/lib/canvas-project-contract";
+import type { CanvasNodeData } from "@/app/(user)/canvas/types";
+import { canvasProjectRevision, type CanvasSaveReceipt, type CanvasSaveRequest } from "@/lib/canvas-project-receipt";
 import { summarizeCanvasProjectRecord } from "@/lib/canvas-project-summary";
 import { summarizeCanvasProject, type CreateOverviewMedia, type CreateOverviewProject } from "@/lib/create-workbench-overview";
 import { readJsonDataFile, writeJsonDataFile } from "@/lib/server/data-adapter";
-import { ensurePostgresSchema, getDatabaseProvider, postgresQuery } from "@/lib/server/database";
+import { ensurePostgresSchema, getDatabaseProvider, postgresQuery, type QueryExecutor, withPostgresTransaction } from "@/lib/server/database";
 
 type CanvasProjectRecord = { userId: string; project: CanvasProject };
-type CanvasProjectDatabase = { version: 1; projects: CanvasProjectRecord[] };
+type CanvasProjectReceiptRecord = { userId: string; projectId: string; createdAt: string; receipt: CanvasSaveReceipt };
+type CanvasProjectDatabase = { version: 1 | 2; projects: CanvasProjectRecord[]; receipts?: CanvasProjectReceiptRecord[] };
+
+type CanvasProjectReceiptRow = {
+    batch_id: string;
+    fingerprint: string;
+    base_revision: string | number;
+    result_revision: string | number;
+    receipt_json: CanvasSaveReceipt | string;
+};
 
 const FILE_NAME = "canvas-projects.json";
 let mutationQueue = Promise.resolve();
@@ -33,6 +44,7 @@ export async function listCanvasProjectSummaries(userId: string, input?: { page?
         const result = await postgresQuery<Record<string, unknown>>(
             paged
                 ? `SELECT id, title, created_at, updated_at,
+                        COALESCE(NULLIF(project_json->>'revision', '')::bigint, 0) AS revision,
                         project_json->>'sourceHandoffId' AS source_handoff_id,
                         project_json->>'creativeConversationId' AS creative_conversation_id,
                         jsonb_array_length(CASE WHEN jsonb_typeof(project_json->'nodes') = 'array' THEN project_json->'nodes' ELSE '[]'::jsonb END) AS node_count,
@@ -46,6 +58,7 @@ export async function listCanvasProjectSummaries(userId: string, input?: { page?
                  ORDER BY updated_at DESC, id ASC
                  LIMIT $2 OFFSET $3`
                 : `SELECT id, title, created_at, updated_at,
+                        COALESCE(NULLIF(project_json->>'revision', '')::bigint, 0) AS revision,
                         project_json->>'sourceHandoffId' AS source_handoff_id,
                         project_json->>'creativeConversationId' AS creative_conversation_id,
                         jsonb_array_length(CASE WHEN jsonb_typeof(project_json->'nodes') = 'array' THEN project_json->'nodes' ELSE '[]'::jsonb END) AS node_count,
@@ -124,6 +137,67 @@ export async function getCanvasProject(id: string, userId: string) {
     return (await readDatabase()).projects.find((record) => record.userId === userId && record.project.id === id)?.project || null;
 }
 
+export async function getCanvasProjectSaveReceipt(userId: string, projectId: string, batchId: string) {
+    if (getDatabaseProvider() === "postgres") {
+        await ensurePostgresSchema();
+        const result = await postgresQuery<CanvasProjectReceiptRow>("SELECT batch_id, fingerprint, base_revision, result_revision, receipt_json FROM canvas_project_save_receipts WHERE user_id = $1 AND project_id = $2 AND batch_id = $3", [
+            userId,
+            projectId,
+            batchId,
+        ]);
+        return result.rows[0] ? receiptFromRow(projectId, result.rows[0]) : null;
+    }
+    const record = (await readDatabase()).receipts?.find((item) => item.userId === userId && item.projectId === projectId && item.receipt.batchId === batchId);
+    return record ? structuredClone(record.receipt) : null;
+}
+
+export type CanvasNodeImportRequest = Readonly<{
+    projectId: string;
+    expectedRevision: number;
+    batchId: string;
+    fingerprint: string;
+    nodes: readonly CanvasNodeData[];
+    updatedAt: string;
+}>;
+
+export async function applyCanvasProjectNodeImportBatch(userId: string, request: CanvasNodeImportRequest): Promise<{ project: CanvasProject; receipt: CanvasSaveReceipt }> {
+    if (getDatabaseProvider() === "postgres") {
+        await ensurePostgresSchema();
+        return withPostgresTransaction(async (client) => {
+            const current = await lockPostgresProject(client, userId, request.projectId);
+            const existing = await client.query<CanvasProjectReceiptRow>("SELECT batch_id, fingerprint, base_revision, result_revision, receipt_json FROM canvas_project_save_receipts WHERE user_id = $1 AND project_id = $2 AND batch_id = $3", [
+                userId,
+                request.projectId,
+                request.batchId,
+            ]);
+            const outcome = canvasNodeImportOutcome(current, request, existing.rows[0] ? receiptFromRow(request.projectId, existing.rows[0]) : undefined);
+            if (outcome.project === current) return outcome;
+            const result = await client.query(
+                `UPDATE canvas_projects SET title = $3, project_json = $4::jsonb, updated_at = $5
+                 WHERE id = $1 AND user_id = $2 RETURNING id`,
+                [outcome.project.id, userId, outcome.project.title, JSON.stringify(outcome.project), new Date(outcome.project.updatedAt)],
+            );
+            if (!result.rows[0]) throw new CanvasProjectStoreError("画布项目不存在", 404);
+            await client.query(
+                `INSERT INTO canvas_project_save_receipts (project_id, user_id, batch_id, fingerprint, base_revision, result_revision, receipt_json, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)`,
+                [request.projectId, userId, outcome.receipt.batchId, outcome.receipt.fingerprint, outcome.receipt.baseRevision, outcome.receipt.resultRevision, JSON.stringify(outcome.receipt), new Date(outcome.project.updatedAt)],
+            );
+            return outcome;
+        });
+    }
+    return mutateDatabaseResult((database) => {
+        const record = database.projects.find((item) => item.userId === userId && item.project.id === request.projectId);
+        if (!record) throw new CanvasProjectStoreError("画布项目不存在", 404);
+        const existing = (database.receipts || []).find((item) => item.userId === userId && item.projectId === request.projectId && item.receipt.batchId === request.batchId);
+        const outcome = canvasNodeImportOutcome(record.project, request, existing?.receipt);
+        if (outcome.project === record.project) return { database, result: outcome };
+        const projects = database.projects.map((item) => (item === record ? { ...item, project: structuredClone(outcome.project) } : item));
+        const receiptRecord: CanvasProjectReceiptRecord = { userId, projectId: request.projectId, createdAt: outcome.project.updatedAt, receipt: outcome.receipt };
+        return { database: { ...database, version: 2, projects, receipts: [receiptRecord, ...(database.receipts || [])] }, result: { project: structuredClone(outcome.project), receipt: structuredClone(outcome.receipt) } };
+    });
+}
+
 export async function createCanvasProject(userId: string, project: CanvasProject) {
     if (getDatabaseProvider() === "postgres") {
         await ensurePostgresSchema();
@@ -165,6 +239,49 @@ export async function updateCanvasProject(userId: string, project: CanvasProject
     return project;
 }
 
+export async function saveCanvasProject(userId: string, request: CanvasSaveRequest): Promise<{ project: CanvasProject; receipt: CanvasSaveReceipt }> {
+    if (getDatabaseProvider() === "postgres") {
+        await ensurePostgresSchema();
+        return withPostgresTransaction(async (client) => {
+            const current = await lockPostgresProject(client, userId, request.project.id);
+            const existing = await client.query<CanvasProjectReceiptRow>("SELECT batch_id, fingerprint, base_revision, result_revision, receipt_json FROM canvas_project_save_receipts WHERE user_id = $1 AND project_id = $2 AND batch_id = $3", [
+                userId,
+                request.project.id,
+                request.batchId,
+            ]);
+            const replay = resolveReplay(current, request, existing.rows[0] ? receiptFromRow(request.project.id, existing.rows[0]) : undefined);
+            if (replay.receipt.status !== "applied") return replay;
+            const saved = { ...request.project, revision: canvasProjectRevision(current) + 1 };
+            const result = await client.query(
+                `UPDATE canvas_projects SET title = $3, project_json = $4::jsonb, updated_at = $5
+                 WHERE id = $1 AND user_id = $2 RETURNING id`,
+                [saved.id, userId, saved.title, JSON.stringify(saved), new Date(saved.updatedAt)],
+            );
+            if (!result.rows[0]) throw new CanvasProjectStoreError("画布项目不存在", 404);
+            const receipt = appliedReceipt(saved, request, canvasProjectRevision(current));
+            await client.query(
+                `INSERT INTO canvas_project_save_receipts (project_id, user_id, batch_id, fingerprint, base_revision, result_revision, receipt_json, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)`,
+                [saved.id, userId, receipt.batchId, receipt.fingerprint, receipt.baseRevision, receipt.resultRevision, JSON.stringify(receipt), new Date(saved.updatedAt)],
+            );
+            return { project: saved, receipt };
+        });
+    }
+    return mutateDatabaseResult((database) => {
+        const currentRecord = database.projects.find((record) => record.userId === userId && record.project.id === request.project.id);
+        if (!currentRecord) throw new CanvasProjectStoreError("画布项目不存在", 404);
+        const current = currentRecord.project;
+        const existing = (database.receipts || []).find((record) => record.userId === userId && record.projectId === request.project.id && record.receipt.batchId === request.batchId);
+        const replay = resolveReplay(current, request, existing?.receipt);
+        if (replay.receipt.status !== "applied") return { database, result: replay };
+        const saved = { ...request.project, revision: canvasProjectRevision(current) + 1 };
+        const projects = database.projects.map((record) => (record === currentRecord ? { ...record, project: structuredClone(saved) } : record));
+        const receipt = appliedReceipt(saved, request, canvasProjectRevision(current));
+        const receipts = [{ userId, projectId: request.project.id, createdAt: saved.updatedAt, receipt }, ...(database.receipts || [])];
+        return { database: { ...database, version: 2, projects, receipts }, result: { project: structuredClone(saved), receipt: structuredClone(receipt) } };
+    });
+}
+
 export async function deleteCanvasProjects(userId: string, ids: string[]) {
     const uniqueIds = Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean)));
     if (!uniqueIds.length) return 0;
@@ -183,18 +300,117 @@ export async function deleteCanvasProjects(userId: string, ids: string[]) {
             }
             return true;
         }),
+        receipts: (db.receipts || []).filter((record) => !(record.userId === userId && uniqueIds.includes(record.projectId))),
     }));
     return deleted;
 }
 
 function readDatabase() {
-    return readJsonDataFile<CanvasProjectDatabase>(FILE_NAME, { version: 1, projects: [] });
+    return readJsonDataFile<CanvasProjectDatabase>(FILE_NAME, { version: 2, projects: [], receipts: [] });
 }
 
 function mutateDatabase(mutator: (database: CanvasProjectDatabase) => CanvasProjectDatabase) {
     const operation = mutationQueue.then(async () => writeJsonDataFile(FILE_NAME, mutator(await readDatabase())));
     mutationQueue = operation.catch(() => undefined);
     return operation;
+}
+
+function mutateDatabaseResult<T>(mutator: (database: CanvasProjectDatabase) => { database: CanvasProjectDatabase; result: T }): Promise<T> {
+    const operation = mutationQueue.then(async () => {
+        const mutation = mutator(await readDatabase());
+        await writeJsonDataFile(FILE_NAME, mutation.database);
+        return mutation.result;
+    });
+    mutationQueue = operation.then(
+        () => undefined,
+        () => undefined,
+    );
+    return operation;
+}
+
+async function lockPostgresProject(client: QueryExecutor, userId: string, projectId: string) {
+    const result = await client.query<{ project_json: CanvasProject }>("SELECT project_json FROM canvas_projects WHERE id = $1 AND user_id = $2 FOR UPDATE", [projectId, userId]);
+    if (!result.rows[0]) throw new CanvasProjectStoreError("画布项目不存在", 404);
+    return result.rows[0].project_json;
+}
+
+function resolveReplay(current: CanvasProject, request: CanvasSaveRequest, existing?: CanvasSaveReceipt) {
+    if (existing) {
+        if (existing.fingerprint !== request.fingerprint) {
+            return { project: current, receipt: conflictReceipt(request, canvasProjectRevision(current), "CANVAS_BATCH_ID_CONFLICT", "相同 batchId 对应了不同画布内容") };
+        }
+        return { project: current, receipt: { ...existing, status: "replayed" as const, originalStatus: existing.originalStatus || "applied" } };
+    }
+    const currentRevision = canvasProjectRevision(current);
+    if (currentRevision !== request.expectedRevision) {
+        return { project: current, receipt: conflictReceipt(request, currentRevision, "CANVAS_REVISION_CONFLICT", `期望 revision ${request.expectedRevision}，当前为 ${currentRevision}`) };
+    }
+    return { project: current, receipt: appliedReceipt(request.project, request, currentRevision) };
+}
+
+function canvasNodeImportOutcome(current: CanvasProject, request: CanvasNodeImportRequest, existing?: CanvasSaveReceipt): { project: CanvasProject; receipt: CanvasSaveReceipt } {
+    if (existing) {
+        if (existing.fingerprint !== request.fingerprint) return { project: current, receipt: canvasNodeImportConflict(request, canvasProjectRevision(current), "CANVAS_BATCH_ID_CONFLICT", "相同 batchId 对应了不同节点导入内容") };
+        return { project: current, receipt: { ...existing, status: "replayed", originalStatus: existing.originalStatus || (existing.status === "replayed" ? "applied" : existing.status) } };
+    }
+    const currentRevision = canvasProjectRevision(current);
+    if (currentRevision !== request.expectedRevision) {
+        return { project: current, receipt: canvasNodeImportConflict(request, currentRevision, "CANVAS_REVISION_CONFLICT", `期望 revision ${request.expectedRevision}，当前为 ${currentRevision}`) };
+    }
+    const nodes = request.nodes.map((node) => structuredClone(node));
+    const incomingIds = new Set(nodes.map((node) => node.id));
+    if (!nodes.length || incomingIds.size !== nodes.length || current.nodes.some((node) => incomingIds.has(node.id))) {
+        return { project: current, receipt: canvasNodeImportConflict(request, currentRevision, "CANVAS_NODE_ID_CONFLICT", "节点导入 ID 为空、重复或已存在") };
+    }
+    if (current.nodes.length + nodes.length > 2_000) return { project: current, receipt: canvasNodeImportConflict(request, currentRevision, "CANVAS_NODE_LIMIT", "画布节点数量超过 2000 上限") };
+    const parsedTime = Date.parse(request.updatedAt);
+    const previousTime = Date.parse(current.updatedAt);
+    const updatedAt = new Date(Math.max(Number.isFinite(parsedTime) ? parsedTime : Date.now(), Number.isFinite(previousTime) ? previousTime + 1 : Date.now())).toISOString();
+    const project: CanvasProject = { ...current, revision: currentRevision + 1, nodes: [...current.nodes, ...nodes], updatedAt };
+    const receipt: CanvasSaveReceipt = {
+        projectId: current.id,
+        batchId: request.batchId,
+        fingerprint: request.fingerprint,
+        status: "applied",
+        baseRevision: currentRevision,
+        resultRevision: currentRevision + 1,
+        affectedIds: Object.freeze(nodes.map((node) => node.id)),
+    };
+    return { project, receipt };
+}
+
+function canvasNodeImportConflict(request: CanvasNodeImportRequest, currentRevision: number, code: string, message: string): CanvasSaveReceipt {
+    return {
+        projectId: request.projectId,
+        batchId: request.batchId,
+        fingerprint: request.fingerprint,
+        status: "conflict",
+        baseRevision: request.expectedRevision,
+        resultRevision: currentRevision,
+        affectedIds: [],
+        error: { code, message, retryable: false },
+    };
+}
+
+function appliedReceipt(project: CanvasProject, request: CanvasSaveRequest, baseRevision: number): CanvasSaveReceipt {
+    return { projectId: project.id, batchId: request.batchId, fingerprint: request.fingerprint, status: "applied", baseRevision, resultRevision: baseRevision + 1 };
+}
+
+function conflictReceipt(request: CanvasSaveRequest, currentRevision: number, code: string, message: string): CanvasSaveReceipt {
+    return {
+        projectId: request.project.id,
+        batchId: request.batchId,
+        fingerprint: request.fingerprint,
+        status: "conflict",
+        baseRevision: request.expectedRevision,
+        resultRevision: currentRevision,
+        error: { code, message, retryable: false },
+    };
+}
+
+function receiptFromRow(projectId: string, row: CanvasProjectReceiptRow): CanvasSaveReceipt {
+    const receipt = typeof row.receipt_json === "string" ? (JSON.parse(row.receipt_json) as CanvasSaveReceipt) : row.receipt_json;
+    return { ...receipt, projectId, batchId: row.batch_id, fingerprint: row.fingerprint, baseRevision: Number(row.base_revision), resultRevision: Number(row.result_revision) };
 }
 
 function mapPostgresOverview(row: Record<string, unknown>): CreateOverviewProject {
@@ -226,6 +442,7 @@ function mapProjectSummary(row: Record<string, unknown>): CanvasProjectSummary {
     const previewUrl = String(row.preview_url || "").trim();
     return {
         id: String(row.id || ""),
+        revision: Math.max(0, Number(row.revision) || 0),
         ...(sourceHandoffId ? { sourceHandoffId } : {}),
         ...(creativeConversationId ? { creativeConversationId } : {}),
         title: String(row.title || ""),

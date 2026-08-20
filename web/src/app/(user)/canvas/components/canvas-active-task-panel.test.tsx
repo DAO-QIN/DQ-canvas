@@ -11,6 +11,7 @@ describe("CanvasActiveTaskPanel", () => {
     it("keeps task details collapsed until the user opens the task summary", () => {
         const markup = renderToStaticMarkup(
             <CanvasActiveTaskPanel
+                projectId="canvas-one"
                 tasks={[
                     {
                         id: "task-one",
@@ -30,12 +31,13 @@ describe("CanvasActiveTaskPanel", () => {
     });
 
     it("stays out of the DOM when there are no active tasks", () => {
-        expect(renderToStaticMarkup(<CanvasActiveTaskPanel tasks={[]} />)).toBe("");
+        expect(renderToStaticMarkup(<CanvasActiveTaskPanel projectId="canvas-one" tasks={[]} />)).toBe("");
     });
 
     it("only labels tasks with a persisted charge and keeps duration updates outside the live region", () => {
         const markup = renderToStaticMarkup(
             <CanvasActiveTaskPanel
+                projectId="canvas-one"
                 tasks={[
                     { id: "charged", type: "image", status: "running", createdAt: 1, updatedAt: 2, billing: { pointsCost: 8 } },
                     { id: "unbilled", type: "text", status: "running", createdAt: 1, updatedAt: 2 },

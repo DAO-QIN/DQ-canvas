@@ -27,6 +27,7 @@ import { buildGrok2ApiVideoRequest, GROK2API_VIDEO_OPERATION } from "@/lib/grok2
 import { systemAiBillingHeaders } from "@/lib/server/system-ai-billing";
 import { requestRuntimeCredential, workerContextHeaders } from "@/lib/server/maintenance-auth";
 import { expandCanvasVideoSkillMentions } from "@/lib/server/canvas-skill-mentions";
+import { requiredDirectCreationReferenceSkill } from "@/lib/server/direct-creation-skill";
 import { writeVideoGenerationLog } from "@/lib/server/video-task-log";
 import { buildOpenAiVideoFormData } from "./video-task-openai";
 import { requestPublicOrigin } from "@/lib/request-origin";
@@ -76,6 +77,8 @@ export async function POST(request: Request) {
         if (!channels.length || !prompt) return NextResponse.json({ error: "视频任务参数不完整或渠道不支持" }, { status: 400 });
         const publicOrigin = requestPublicOrigin(request);
         const references = (Array.isArray(body.references) ? body.references : []).map((reference) => ({ ...reference, url: signReferenceAssetInputUrl(String(reference.url || ""), publicOrigin) }));
+        const requiredSkill = requiredDirectCreationReferenceSkill(body.skillIds, settings.agentSkills, "video");
+        if (requiredSkill && !references.length) return NextResponse.json({ error: `Skill ${requiredSkill.name} requires a reference asset` }, { status: 400 });
         const providerPrompt = withVideoReferenceFidelity(expandCanvasVideoSkillMentions(prompt, body.skillIds, settings.agentSkills), references);
         const origin = resolveInternalOrigin(new URL(request.url).origin);
         const cookie = requestRuntimeCredential(request, user.id);

@@ -31,7 +31,7 @@ export function resolveAgentPlanningProfile(run: PlanningRun): AgentPlanningProf
     const prompt = run.prompt.trim();
     const selectedTypes = selectedNodeTypes(run.snapshot);
     const capabilities = inferCapabilities(run.surface, prompt, selectedTypes);
-    const complex = run.surface === "drama" || COMPLEX_RE.test(prompt) || (run.surface === "canvas" && snapshotNodeCount(run.snapshot) > 10);
+    const complex = run.surface === "drama" || COMPLEX_RE.test(prompt) || ((run.surface === "canvas" || run.surface === "design") && snapshotEntityCount(run.snapshot) > 10);
     const multi = complex || MULTI_RE.test(prompt);
     const complexity = complex ? "complex" : multi ? "multi" : "ordinary";
     return {
@@ -67,6 +67,7 @@ function inferCapabilities(surface: CreativeSurface, prompt: string, selectedTyp
 
 function skillWorkspaces(surface: CreativeSurface, capabilities: Set<string>) {
     if (surface === "canvas") return new Set<AgentSkillWorkspace>(["canvas"]);
+    if (surface === "design") return new Set<AgentSkillWorkspace>(["design"]);
     if (surface === "drama") return new Set<AgentSkillWorkspace>(["drama"]);
     const workspaces = new Set<AgentSkillWorkspace>();
     if (capabilities.has("image")) workspaces.add("image");
@@ -79,16 +80,13 @@ function skillWorkspaces(surface: CreativeSurface, capabilities: Set<string>) {
 
 function selectedNodeTypes(snapshot: unknown) {
     const source = record(snapshot);
-    const selected = new Set(strings(source.selectedNodeIds));
-    return new Set(
-        records(source.nodes)
-            .filter((node) => selected.has(text(node.id)))
-            .map((node) => text(node.type)),
-    );
+    const selected = new Set([...strings(source.selectedNodeIds), ...strings(source.selectionIds)]);
+    return new Set([...records(source.nodes), ...records(source.entities)].filter((node) => selected.has(text(node.id))).map((node) => text(node.type) || text(node.kind)));
 }
 
-function snapshotNodeCount(snapshot: unknown) {
-    return records(record(snapshot).nodes).length;
+function snapshotEntityCount(snapshot: unknown) {
+    const source = record(snapshot);
+    return Math.max(records(source.nodes).length, records(source.entities).length);
 }
 
 function record(value: unknown): Record<string, unknown> {

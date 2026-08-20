@@ -4,6 +4,7 @@
   "defaultOpen": true,
   "pages": [
     "[更新日志](/docs/progress/changelog)",
+    "design-board",
     "pending-test",
     "todo"
   ]

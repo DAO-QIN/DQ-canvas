@@ -14,6 +14,51 @@ describe("canvas derived image request flow", () => {
 
         expect(upload).toBeLessThan(validation);
         expect(validation).toBeLessThan(append);
+        expect(flow).toContain('"annotation"');
+    });
+
+    it.each([
+        ["crop", "const cropImageNode", "const splitImageNode", "await cropDataUrl", '"crop"'],
+        ["split", "const splitImageNode", "const maskEditImageNode", "await splitDataUrl", '"split"'],
+        ["upscale", "const upscaleImageNode", "const generateAngleNode", "await upscaleDataUrl", '"upscale"'],
+        ["refine", "const refineBackgroundImageNode", "const cropImageNode", "await uploadCanvasImage(result)", '"refine-background"'],
+    ])("guards %s processing with a request ticket and validates after async media work", (_name, startMarker, endMarker, asyncMarker, operationMarker) => {
+        const flow = functionSource(startMarker, endMarker);
+        const ticket = requiredIndex(flow, "beginCanvasDerivedImageRequest");
+        const asyncWork = requiredIndex(flow, asyncMarker);
+        const validationAfterWork = requiredIndex(flow.slice(asyncWork), "currentCanvasDerivedImageSource") + asyncWork;
+        const finish = requiredIndex(flow, "finishCanvasDerivedImageRequest");
+
+        expect(ticket).toBeLessThan(asyncWork);
+        expect(asyncWork).toBeLessThan(validationAfterWork);
+        expect(validationAfterWork).toBeLessThan(finish);
+        expect(flow).toContain(operationMarker);
+        expect(flow).toMatch(/appendDerivedImageNode|canvasDerivedImageProvenance/);
+    });
+
+    it("guards mask edit before node creation, before task submission, and after completion", () => {
+        const flow = functionSource("const maskEditImageNode", "const upscaleImageNode");
+        const ticket = requiredIndex(flow, "beginCanvasDerivedImageRequest");
+        const initialValidation = requiredIndex(flow, "const sourceNode = currentCanvasDerivedImageSource");
+        const childCreation = requiredIndex(flow, "childId = nanoid()");
+        const task = requiredIndex(flow, "await startAndCompleteImageTask");
+        const completionValidation = requiredIndex(flow, "const completedSource = currentCanvasDerivedImageSource");
+
+        expect(ticket).toBeLessThan(initialValidation);
+        expect(initialValidation).toBeLessThan(childCreation);
+        expect(childCreation).toBeLessThan(task);
+        expect(task).toBeLessThan(completionValidation);
+        expect(flow.slice(task, completionValidation)).toContain("validateMaskEditSource");
+        expect(flow).toContain('canvasDerivedImageProvenance(sourceNode, "mask-edit")');
+        expect(flow).toContain("discardDerivedImageChild(childId)");
+        expect(flow).toContain("finishCanvasDerivedImageRequest");
+    });
+
+    it("records the unified operation/source provenance for every derived image capability", () => {
+        for (const operation of ["annotation", "crop", "split", "mask-edit", "remove-background", "refine-background", "upscale", "portrait-texture", "angle", "emotion"]) {
+            expect(source, `Missing provenance operation: ${operation}`).toContain(`\"${operation}\"`);
+        }
+        expect(source).toContain("canvasDerivedImageProvenance");
     });
 
     it("revalidates the angle source around creation and task completion", () => {

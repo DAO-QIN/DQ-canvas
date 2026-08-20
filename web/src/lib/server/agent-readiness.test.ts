@@ -23,7 +23,7 @@ describe("buildAgentReadiness", () => {
         } as never;
         const result = buildAgentReadiness(settings);
         expect(result.ready).toBe(true);
-        expect(result.skills).toEqual({ image: 1, video: 0, canvas: 1, drama: 0 });
+        expect(result.skills).toEqual({ image: 1, video: 0, canvas: 1, design: 0, drama: 0 });
     });
 
     it("reports missing or disabled model channels", () => {

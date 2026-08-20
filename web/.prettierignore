@@ -1,6 +1,8 @@
 .next
 .next-*
+.asui-*
 .data
+.data-*
 node_modules
 dist
 build
@@ -10,6 +12,8 @@ e2e-artifacts
 playwright-report
 e2e-data
 .e2e-data
+.e2e-*
+.phase4*
 bun.lock
 pnpm-lock.yaml
 *.log
@@ -23,5 +27,7 @@ pnpm-lock.yaml
 .tmp-*
 .playwright-cli
 .trace-*
+output/
+package-lock.json
 public/mediapipe/
 public/three/

@@ -17,10 +17,12 @@ export function expandCanvasVideoSkillMentions(prompt: string, skillIds: unknown
     const availableSkills = new Map(skills.filter((skill) => skill.enabled && (skill.workspaces || ["image"]).includes(VIDEO_WORKSPACE) && selectedIds.has(skill.id)).map((skill) => [skill.id, skill]));
     if (!availableSkills.size) return prompt;
 
-    return prompt.replace(SKILL_REFERENCE_PATTERN, (token, id: string) => {
+    const expanded = prompt.replace(SKILL_REFERENCE_PATTERN, (token, id: string) => {
         const skill = availableSkills.get(id.trim());
         return skill ? renderCanvasVideoSkillPrompt(skill) : token;
     });
+    if (expanded !== prompt) return expanded;
+    return [...Array.from(availableSkills.values(), renderCanvasVideoSkillPrompt), prompt].join("\n\n---\n\n");
 }
 
 export function renderCanvasVideoSkillPrompt(skill: Pick<AgentSkill, "name" | "description" | "instructions">) {

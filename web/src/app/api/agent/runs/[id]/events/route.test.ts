@@ -53,4 +53,26 @@ describe("Agent Run SSE", () => {
         expect(mocks.getLatestCreativeRunEventId).toHaveBeenCalledWith("run", "run.retry.requested");
         expect(mocks.listCreativeRunEvents).toHaveBeenCalledWith("run", "11");
     });
+
+    it("keeps an awaiting-confirmation stream open and restores the pending request", async () => {
+        mocks.getAgentRun.mockResolvedValue({
+            id: "run",
+            userId: "user",
+            status: "awaiting_confirmation",
+            tasks: [],
+            workspaceActionRequest: { surface: "canvas", projectId: "project", baseRevision: 2, batchId: "batch", actions: [] },
+            updatedAt: 5,
+        });
+        mocks.listCreativeRunEvents.mockResolvedValue([]);
+
+        const response = await GET(new Request("http://localhost/api/agent/runs/run/events"), { params: Promise.resolve({ id: "run" }) });
+        const reader = response.body!.getReader();
+        const first = await reader.read();
+        await reader.cancel();
+        const body = new TextDecoder().decode(first.value);
+
+        expect(body).toContain('"status":"awaiting_confirmation"');
+        expect(body).toContain('"workspaceActionRequest"');
+        expect(mocks.recover).not.toHaveBeenCalled();
+    });
 });

@@ -24,7 +24,7 @@ export function AppWorkspaceShell({ children }: { children: ReactNode }) {
     const [sidebarExpanded, setSidebarExpanded] = useState(false);
     const site = usePublicSessionStore((state) => state.payload?.settings?.site) || { title: "DQ-绘图", logoUrl: "/logo.svg" };
     const tool = navigationToolForPathname(pathname);
-    const fullscreen = /^\/canvas\/[^/]+/.test(pathname);
+    const fullscreen = /^\/(?:canvas|design)\/[^/]+/.test(pathname);
     const rootSlug = pathname.split("/").filter(Boolean)[0] || "";
     const pageTitle = tool?.label || PAGE_TITLES[rootSlug] || "工作空间";
 

@@ -17,6 +17,7 @@ export async function GET(request: Request) {
         const conversations = await listConversationsForUser(user.id, {
             surface: url.searchParams.get("surface"),
             source: url.searchParams.get("source"),
+            projectId: url.searchParams.get("projectId"),
             status: url.searchParams.get("status"),
             limit: String(limit + 1),
             offset: url.searchParams.get("offset"),

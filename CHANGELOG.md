@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- [Design] 新增独立“我的画板”项目域与 `/design`、`/design/[id]`：支持无限 Workspace、多固定尺寸 Frame、图片/文字/基础图形、图层、裁剪、对齐吸附、历史、AI 图片派生和保存恢复。
+- [共享工作台] Design 与 Canvas 复用 Top Bar、Tool/Zoom Dock、Right Rail、生成 Composer、任务恢复、素材选择、Agent 动作与跨 Surface Handoff；Design 与 Canvas 的文档真源、历史栈和保存契约保持隔离。
+- [数据] 新增 `design_projects`、设计版本与操作回执；PostgreSQL 和文件 Provider 统一执行用户归属、revision 乐观锁、回放/冲突语义和级联删除，数据库初始化增加跨进程 advisory lock。
+- [导出] Design 支持 Frame 原始像素 PNG/JPEG/WebP、1x-4x、透明/白色/Frame 背景、单张直接下载及多 Frame ZIP + `manifest.json`；资源、revision、编码或像素预算失败时不会生成残缺包。
+- [灰度] 新共享布局由 `NEXT_PUBLIC_DQ_CREATIVE_WORKSPACE_DESIGN_ENABLED` 与 `NEXT_PUBLIC_DQ_CREATIVE_WORKSPACE_CANVAS_ENABLED` 两个构建时开关独立控制，默认关闭，并保留旧布局用于首个稳定发布周期的快速回滚。
+- [验证] 本地生产构建、真实 PostgreSQL 空库、三档响应式、Fabric 200 元素性能、导出像素、完整工作区 Chromium、全量 Vitest、TypeScript、ESLint 与 diff Gate 已通过；线上灰度尚未执行，外部文本/图片/视频模型本轮均因 HTTP 401 未完成真实成功验收。
+
 - [Grok2API/媒体] 修复 Next standalone 镜像中 `file-type` 动态导入导致视频持久化校验失败的问题；媒体文件现在使用有限前缀静态检测，仍保留 MIME、文件签名、大小和任务归属校验。补充 Grok2API 视频 `/content` 适配、站内签名代理和真实文本/图片/视频验收记录。
 
 - [Canvas] 画布统一了性能、快捷键与添加组件入口：左上/右上共享“自动性能、画质优先、性能优先”，左下键盘打开唯一快捷键说明，七类创作节点收纳到可键盘操作的添加菜单。节点输入支持可读资源 token、视频 Skill、首尾帧和素材架；媒体节点提供保留连线与中心点的自然替换操作，连接端改为可吸附的竖向胶囊。

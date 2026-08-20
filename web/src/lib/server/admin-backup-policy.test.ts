@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { mergeAuthBackupSecrets, sanitizeAuthBackup } from "./admin-backup-policy";
+import { ADMIN_ACCOUNT_CONFIG_BACKUP_SCOPE, mergeAuthBackupSecrets, sanitizeAuthBackup } from "./admin-backup-policy";
 
 const current = {
     users: [{ id: "user-1", username: "admin", email: "admin@example.com", passwordHash: "hash-current", pointsBalance: 10 }],
@@ -14,6 +14,12 @@ const current = {
 };
 
 describe("admin backup policy", () => {
+    it("declares account-config coverage without advertising creative data recovery", () => {
+        expect(ADMIN_ACCOUNT_CONFIG_BACKUP_SCOPE).toMatchObject({ mode: "account-config", restoreStrategy: "merge-no-delete", disasterRecovery: false });
+        expect(ADMIN_ACCOUNT_CONFIG_BACKUP_SCOPE.included).toContain("account-deletion-requests");
+        expect(ADMIN_ACCOUNT_CONFIG_BACKUP_SCOPE.excluded).toEqual(expect.arrayContaining(["canvas-projects", "design-projects", "creative-runtime", "generation-tasks", "media-binaries", "object-storage-manifest"]));
+    });
+
     it("removes authentication and upstream secrets from exported auth data", () => {
         expect(sanitizeAuthBackup(current)).toEqual({
             users: [{ id: "user-1", username: "admin", pointsBalance: 10 }],

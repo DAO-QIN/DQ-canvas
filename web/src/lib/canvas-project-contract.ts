@@ -3,6 +3,8 @@ import type { CanvasAssistantSession, CanvasConnection, CanvasNodeData, Viewport
 
 export type CanvasProject = {
     id: string;
+    /** Monotonic server revision. Legacy projects may omit it and are treated as revision 0. */
+    revision?: number;
     sourceHandoffId?: string;
     creativeConversationId?: string;
     title: string;
@@ -23,6 +25,7 @@ export type CanvasProjectMediaPreview = {
 };
 
 export type CanvasProjectSummary = Pick<CanvasProject, "id" | "sourceHandoffId" | "creativeConversationId" | "title" | "createdAt" | "updatedAt"> & {
+    revision: number;
     nodeCount: number;
     connectionCount: number;
     preview?: CanvasProjectMediaPreview;

@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
     getCanvasProject: vi.fn(),
     listCanvasProjects: vi.fn(),
     listCanvasProjectSummaries: vi.fn(),
+    saveCanvasProject: vi.fn(),
     updateCanvasProject: vi.fn(),
     deleteUserLocalMediaAssets: vi.fn(),
 }));
@@ -22,6 +23,7 @@ vi.mock("@/lib/server/canvas-project-store", () => ({
     getCanvasProject: mocks.getCanvasProject,
     listCanvasProjects: mocks.listCanvasProjects,
     listCanvasProjectSummaries: mocks.listCanvasProjectSummaries,
+    saveCanvasProject: mocks.saveCanvasProject,
     updateCanvasProject: mocks.updateCanvasProject,
 }));
 vi.mock("@/lib/server/local-media-storage", () => ({ deleteUserLocalMediaAssets: mocks.deleteUserLocalMediaAssets }));
@@ -36,6 +38,10 @@ describe("canvas project service lifecycle", () => {
         mocks.createCreativeConversation.mockResolvedValue({ id: "conversation-new" });
         mocks.updateCreativeConversation.mockResolvedValue({ id: "conversation-new", status: "archived" });
         mocks.listCanvasProjects.mockResolvedValue([]);
+        mocks.saveCanvasProject.mockImplementation(async (userId: string, request: { project: CanvasProject; expectedRevision: number; batchId: string; fingerprint: string }) => ({
+            project: request.project,
+            receipt: { projectId: request.project.id, batchId: request.batchId, fingerprint: request.fingerprint, status: "applied", baseRevision: request.expectedRevision, resultRevision: request.expectedRevision + 1 },
+        }));
     });
 
     it("archives the new conversation when project creation fails", async () => {
@@ -63,8 +69,8 @@ describe("canvas project service lifecycle", () => {
         mocks.updateCanvasProject.mockResolvedValue(current);
         const padding = "x".repeat(MAX_PROJECT_BYTES - Buffer.byteLength(JSON.stringify({ padding: "" })));
 
-        await expect(updateCanvasProjectForUser("user-one", current.id, { padding })).resolves.toBe(current);
-        expect(mocks.updateCanvasProject).toHaveBeenCalledTimes(1);
+        await expect(updateCanvasProjectForUser("user-one", current.id, { padding })).resolves.toMatchObject({ project: { id: current.id, title: current.title }, receipt: { status: "applied" } });
+        expect(mocks.saveCanvasProject).toHaveBeenCalledTimes(1);
     });
 
     it("rejects a canvas snapshot one byte over the 30MB limit", async () => {

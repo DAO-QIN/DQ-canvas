@@ -28,6 +28,10 @@ export type BackgroundRemovalTask = {
     stage?: string;
     sourceStorageKey?: string;
     sourceNodeId?: string;
+    sourceIdentity?: string;
+    sourceElementId?: string;
+    sourceAssetVersionId?: string;
+    sourceLocator?: unknown;
     projectId?: string;
     options?: BackgroundRemovalOptionsV1;
     optionsHash?: string;
@@ -63,32 +67,41 @@ export class BackgroundRemovalTaskTerminalError extends Error {
 }
 
 export type BackgroundRemovalTaskInput = {
-    sourceStorageKey: string;
+    sourceStorageKey?: string;
     projectId: string;
-    sourceNodeId: string;
+    sourceNodeId?: string;
+    surface?: "canvas" | "design";
+    sourceElementId?: string;
+    sourceAssetVersionId?: string;
+    sourceLocator?: unknown;
     options?: BackgroundRemovalOptionsV1;
     signal?: AbortSignal;
     onTaskCreated?: (task: { id: string; type: "image_process" }) => void;
 };
 
 export async function createBackgroundRemovalTask(input: BackgroundRemovalTaskInput): Promise<BackgroundRemovalTask> {
-    const sourceStorageKey = input.sourceStorageKey.trim();
+    const sourceStorageKey = input.sourceStorageKey?.trim() || "";
     const projectId = input.projectId.trim();
-    const sourceNodeId = input.sourceNodeId.trim();
-    if (!sourceStorageKey) throw new Error("图片尚未保存到媒体存储");
-    if (!projectId || !sourceNodeId) throw new Error("抠图必须关联画布项目和源节点");
+    const sourceNodeId = input.sourceNodeId?.trim() || "";
+    if (input.surface !== "design" && !sourceStorageKey) throw new Error("图片尚未保存到媒体存储");
+    if (!projectId || (input.surface !== "design" && !sourceNodeId) || (input.surface === "design" && (!input.sourceElementId || !input.sourceAssetVersionId || !input.sourceLocator)))
+        throw new Error(input.surface === "design" ? "抠图必须关联画板图片元素、版本和资源" : "抠图必须关联画布项目和源节点");
     const options = { ...normalizeBackgroundRemovalOptions(input.options), outputMode: "transparent" as const };
 
     const response = await fetch("/api/background-removal-tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-            sourceStorageKey,
+            ...(sourceStorageKey ? { sourceStorageKey } : {}),
             options,
             context: {
                 projectId,
-                sourceNodeId,
-                clientRequestId: `canvas-background-removal:${sourceNodeId}`,
+                surface: input.surface || "canvas",
+                ...(sourceNodeId ? { sourceNodeId } : {}),
+                ...(input.sourceElementId ? { sourceElementId: input.sourceElementId } : {}),
+                ...(input.sourceAssetVersionId ? { sourceAssetVersionId: input.sourceAssetVersionId } : {}),
+                ...(input.sourceLocator ? { sourceLocator: input.sourceLocator } : {}),
+                clientRequestId: input.surface === "design" ? `design-background-removal:${input.sourceElementId}:${input.sourceAssetVersionId}` : `canvas-background-removal:${sourceNodeId}`,
             },
         }),
     });

@@ -1,4 +1,13 @@
-import { creativeConversationSourceForSurface, isCreativeConversationSourceCompatible, normalizeCreativeConversationSource, normalizeCreativeSurface, type CreativeAssetType, type CreativeConversationStatus } from "@/lib/creative-runtime-contract";
+import {
+    creativeConversationSourceForSurface,
+    isCreativeConversationSourceCompatible,
+    normalizeCreativeConversationSource,
+    normalizeCreativeSurface,
+    type CreativeAssetType,
+    type CreativeConversationStatus,
+    type CreativeSurface,
+} from "@/lib/creative-runtime-contract";
+import type { UserRole } from "@/lib/auth/store-types";
 import { CREATIVE_UPLOAD_MAX_BYTES, isCreativeUploadMimeType } from "@/lib/creative-upload";
 import {
     appendCreativeConversationExchange,
@@ -9,11 +18,14 @@ import {
     listCreativeAssets,
     listCreativeConversations,
     listCreativeMessages,
+    listRecentCreativeMediaAssetsForUser,
     registerCreativeAssets,
     updateCreativeConversation,
 } from "@/lib/server/creative-runtime-store";
 import { writePersistentMediaDataUrl } from "@/lib/server/reference-asset-store";
 import { getLocalMediaRegistrations } from "@/lib/server/local-media-registry";
+import { localMediaStorageKeyFromValue } from "@/lib/server/local-media-references";
+import { canAccessGenerationAsset } from "@/lib/server/generation-log-store";
 import { getCreativeWorkbenchSessionDetail, listCreativeWorkbenchSessionSummaries } from "@/lib/server/creative-workbench-session-store";
 import type { WorkbenchWorkspace } from "@/lib/workbench-session-contract";
 import { normalizeWorkbenchAgentAttachments, type WorkbenchAgentAttachment } from "@/lib/workbench-agent-attachment";
@@ -37,17 +49,18 @@ export async function createConversationForUser(userId: string, value: unknown) 
     if (!surface) throw new CreativeRuntimeServiceError("创作入口不正确", 400);
     if (!source || !isCreativeConversationSourceCompatible(surface, source)) throw new CreativeRuntimeServiceError("创作会话来源不正确", 400);
     if (surface === "chat" && projectId) throw new CreativeRuntimeServiceError("普通对话不接受项目标识", 400);
-    if (surface !== "chat" && !projectId) throw new CreativeRuntimeServiceError(surface === "canvas" ? "画布标识不能为空" : "短剧项目标识不能为空", 400);
+    if (surface !== "chat" && !projectId) throw new CreativeRuntimeServiceError(surface === "canvas" ? "画布标识不能为空" : surface === "design" ? "画板标识不能为空" : "短剧项目标识不能为空", 400);
     return createCreativeConversation(userId, { surface, source, projectId, title });
 }
 
-export function listConversationsForUser(userId: string, input: { surface?: string | null; source?: string | null; status?: string | null; limit?: string | null; offset?: string | null }) {
+export function listConversationsForUser(userId: string, input: { surface?: string | null; source?: string | null; projectId?: string | null; status?: string | null; limit?: string | null; offset?: string | null }) {
     const surface = input.surface ? normalizeCreativeSurface(input.surface) : undefined;
     const source = input.source ? normalizeCreativeConversationSource(input.source) : undefined;
     if (input.surface && !surface) throw new CreativeRuntimeServiceError("创作入口不正确", 400);
     if (input.source && !source) throw new CreativeRuntimeServiceError("创作会话来源不正确", 400);
     const status = normalizeStatus(input.status);
-    return listCreativeConversations(userId, { surface: surface || undefined, source: source || undefined, status, limit: Number(input.limit), offset: Number(input.offset) });
+    const projectId = optionalText(input.projectId, 160);
+    return listCreativeConversations(userId, { surface: surface || undefined, source: source || undefined, projectId, status, limit: Number(input.limit), offset: Number(input.offset) });
 }
 
 export function listWorkbenchSessionsForUser(userId: string, workspaceValue: unknown, limit: number) {
@@ -142,6 +155,40 @@ export async function uploadAssetForUser(userId: string, conversationId: string,
     return asset;
 }
 
+export async function referenceExistingAssetForUser(userId: string, role: UserRole, conversationId: string, input: { id: string; type: "image" | "video" | "audio"; url: string; mimeType?: string; title?: string }) {
+    const conversation = await getConversationForUser(userId, conversationId);
+    if (conversation.status !== "active") throw new CreativeRuntimeServiceError("Referenced assets require an active conversation", 409);
+    const url = input.url.trim().slice(0, 2_000);
+    if (!url || (!/^https?:\/\//i.test(url) && !url.startsWith("/api/"))) throw new CreativeRuntimeServiceError("Reference URL must be a managed or HTTP(S) URL", 400);
+
+    const existing = (await listRecentCreativeMediaAssetsForUser(userId, 50)).find((asset) => asset.type === input.type && (asset.serverUrl === url || asset.remoteUrl === url));
+    if (existing) return existing;
+    if (!(await canAccessGenerationAsset(userId, role, url))) throw new CreativeRuntimeServiceError("Referenced asset is missing or inaccessible", 404);
+
+    const serverUrl = url.startsWith("/") ? url : undefined;
+    const remoteUrl = /^https?:\/\//i.test(url) ? url : undefined;
+    const storageKey = localMediaStorageKeyFromValue(url) || undefined;
+    const sourceId = input.id.trim().slice(0, 160) || storageKey || url.slice(0, 160);
+    const [asset] = await registerCreativeAssets([
+        {
+            userId,
+            conversationId,
+            sourceRunId: `recent-reference:${conversationId}`,
+            sourceTaskId: sourceId,
+            ordinal: 0,
+            type: input.type,
+            title: optionalText(input.title, 160) || `最近${input.type === "image" ? "图片" : input.type === "video" ? "视频" : "音频"}`,
+            storageKind: serverUrl ? "local" : "remote",
+            storageKey,
+            serverUrl,
+            remoteUrl,
+            mimeType: input.mimeType,
+            metadata: { source: "recent-asset-reference", sourceAssetId: sourceId },
+        },
+    ]);
+    return asset;
+}
+
 export async function appendWorkbenchExchangeForUser(userId: string, input: { conversationId: string; workspace: "image" | "video"; prompt: string; reply: string; requestId?: string; attachments?: unknown }) {
     const conversation = await getConversationForUser(userId, input.conversationId);
     if (conversation.surface !== "chat" || conversation.source !== `${input.workspace}-workbench`) throw new CreativeRuntimeServiceError("工作台会话入口不正确", 409);
@@ -219,7 +266,7 @@ export async function registerGenerationTaskAssetsForUser(
     input: {
         conversationId?: string;
         runId?: string;
-        surface?: "chat" | "canvas" | "drama";
+        surface?: CreativeSurface;
         projectId?: string;
         taskId: string;
         title: string;

@@ -20,6 +20,13 @@ describe("expandCanvasVideoSkillMentions", () => {
         );
     });
 
+    it("applies a directly selected video skill when the prompt has no mention token", () => {
+        const expanded = expandCanvasVideoSkillMentions("Create a short clip", ["image-motion"], [videoSkill]);
+
+        expect(expanded).toContain("Preserve the subject and animate only the requested movement.");
+        expect(expanded).toContain("Create a short clip");
+    });
+
     it("leaves disabled, non-video, unselected, and unknown mentions intact", () => {
         const skills: AgentSkill[] = [videoSkill, { ...videoSkill, id: "disabled", enabled: false }, { ...videoSkill, id: "image-only", workspaces: ["image"] }];
         const prompt = "@\[skill:disabled\] @\[skill:image-only\] @\[skill:image-motion\] @\[skill:unknown\]";

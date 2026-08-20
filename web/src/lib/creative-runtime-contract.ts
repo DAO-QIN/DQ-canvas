@@ -1,6 +1,6 @@
-export const creativeSurfaces = ["chat", "canvas", "drama"] as const;
+export const creativeSurfaces = ["chat", "canvas", "design", "drama"] as const;
 export type CreativeSurface = (typeof creativeSurfaces)[number];
-export const creativeConversationSources = ["agent", "image-workbench", "video-workbench", "canvas", "drama"] as const;
+export const creativeConversationSources = ["agent", "image-workbench", "video-workbench", "canvas", "design", "drama"] as const;
 export type CreativeConversationSource = (typeof creativeConversationSources)[number];
 
 export type CreativeConversationStatus = "active" | "archived";
@@ -70,6 +70,9 @@ export type CreativeAsset = {
     updatedAt: number;
 };
 
+// Design handoff remains a P5 capability. P3 only makes Design a first-class
+// conversation/task surface, so accepting it here would advertise a workflow
+// whose server and client coordinators do not exist yet.
 export type CreativeProjectHandoffSurface = "canvas" | "drama";
 
 export type CreativeProjectHandoffPlan = {
@@ -166,7 +169,7 @@ export function normalizeCreativeRunRequest(value: unknown): CreativeRunRequest 
     if (skillIds.length > MAX_SKILLS) throw new CreativeRuntimeInputError(`一次最多启用 ${MAX_SKILLS} 个 Skill`);
     if (modelIds.length > MAX_MODELS) throw new CreativeRuntimeInputError(`一次最多选择 ${MAX_MODELS} 个模型`);
     if (surface === "chat" && (projectId || snapshot !== undefined)) throw new CreativeRuntimeInputError("普通对话不接受项目或快照");
-    if (surface !== "chat" && !projectId) throw new CreativeRuntimeInputError(surface === "canvas" ? "画布标识不能为空" : "短剧项目标识不能为空");
+    if (surface !== "chat" && !projectId) throw new CreativeRuntimeInputError(surface === "canvas" ? "画布标识不能为空" : surface === "design" ? "画板标识不能为空" : "短剧项目标识不能为空");
     if (snapshot !== undefined && new TextEncoder().encode(JSON.stringify(snapshot)).length > MAX_SNAPSHOT_BYTES) throw new CreativeRuntimeInputError("当前项目快照过大", 413);
 
     return { clientRequestId, surface, conversationId, projectId, prompt, snapshot, assetIds, skillIds, modelIds, agentModelId };
@@ -181,7 +184,7 @@ export function normalizeCreativeConversationSource(value: unknown): CreativeCon
 }
 
 export function creativeConversationSourceForSurface(surface: CreativeSurface): CreativeConversationSource {
-    return surface === "canvas" || surface === "drama" ? surface : "agent";
+    return surface === "canvas" || surface === "design" || surface === "drama" ? surface : "agent";
 }
 
 export function isCreativeConversationSourceCompatible(surface: CreativeSurface, source: CreativeConversationSource) {

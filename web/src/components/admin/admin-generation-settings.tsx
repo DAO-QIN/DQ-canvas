@@ -51,7 +51,7 @@ export function localAgentReadiness(settings: AuthSettings): AgentReadiness {
         const resolved = resolveLogicalModelConfig(settings.logicalModels, settings.systemChannels, capability, model);
         return { type: capability, model, ready: Boolean(model && resolved), message: !model ? "未设置默认模型" : !resolved ? "默认模型没有可用渠道绑定" : "使用渠道：" + resolved.channel.name };
     });
-    const skills = { image: 0, video: 0, canvas: 0, drama: 0 };
+    const skills = { image: 0, video: 0, canvas: 0, design: 0, drama: 0 };
     for (const skill of settings.agentSkills) if (skill.enabled) for (const workspace of skill.workspaces || ["image"]) skills[workspace] += 1;
     return { ready: capabilities.every((item) => item.ready), capabilities, skills };
 }

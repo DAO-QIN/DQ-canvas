@@ -18,6 +18,7 @@ import { PANORAMA_IMAGE_SIZE } from "../utils/canvas-panorama";
 import { compositeEmotionImage } from "../utils/canvas-emotion";
 import { resolveEmotionSource, sameEmotionSource } from "../utils/canvas-emotion-request";
 import { notifyCanvasGenerationTaskCreated } from "../utils/canvas-generation-task-events";
+import { canvasDerivedImageSourceMatches } from "../utils/canvas-derived-image";
 
 const CanvasAssistantPanel = dynamic(() => import("../components/canvas-assistant-panel").then((mod) => mod.CanvasAssistantPanel), { ssr: false });
 const loadAssetPickerModal = () => import("../components/asset-picker-modal").then((mod) => mod.AssetPickerModal);
@@ -360,6 +361,7 @@ export function useCanvasTaskRuntime({ state }: { state: CanvasPageState }) {
                 assertGenerationRequestActive(nodeId, controller);
                 const target = nodesRef.current.find((node) => node.id === nodeId);
                 if (!target) throw new DOMException("Target node removed", "AbortError");
+                if (target.metadata?.derivedImageProvenance && !canvasDerivedImageSourceMatches(target.metadata.derivedImageProvenance, nodesRef.current)) throw new DOMException("Derived image source changed", "AbortError");
                 return target;
             };
             const targetNode = ensureActiveTarget();
@@ -380,6 +382,7 @@ export function useCanvasTaskRuntime({ state }: { state: CanvasPageState }) {
                 const target = prev.find((node) => node.id === nodeId);
                 if (
                     !target ||
+                    (target.metadata?.derivedImageProvenance && !canvasDerivedImageSourceMatches(target.metadata.derivedImageProvenance, prev)) ||
                     (emotionEdit &&
                         !sameEmotionSource(
                             emotionEdit,

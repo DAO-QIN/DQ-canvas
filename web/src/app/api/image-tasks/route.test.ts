@@ -31,6 +31,7 @@ vi.mock("@/lib/server/generation-task-store", () => ({
     withGenerationConcurrencyLimit: mocks.withConcurrency,
     getStoredGenerationTaskByRequest: mocks.existingTask,
     linkStoredGenerationTask: mocks.linkTask,
+    normalizeGenerationTaskContext: vi.fn((context: Record<string, unknown>) => context),
 }));
 vi.mock("@/lib/server/image-task-store", () => ({ createImageTaskId: mocks.createTaskId, createImageTask: mocks.createTask, failImageTaskSetup: mocks.failSetup }));
 vi.mock("@/lib/server/image-task-reference-payload", () => ({ persistImageTaskReferencePayload: mocks.persistReferences, cleanupImageTaskReferencePayload: mocks.cleanupReferences }));

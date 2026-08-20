@@ -1,6 +1,15 @@
 import { nanoid } from "nanoid";
 
-import { creativeConversationSourceForSurface, normalizeCreativeConversationSource, type CreativeAsset, type CreativeConversation, type CreativeMessage, type CreativeRunEvent, type CreativeSurface } from "@/lib/creative-runtime-contract";
+import {
+    creativeConversationSourceForSurface,
+    normalizeCreativeConversationSource,
+    normalizeCreativeSurface,
+    type CreativeAsset,
+    type CreativeConversation,
+    type CreativeMessage,
+    type CreativeRunEvent,
+    type CreativeSurface,
+} from "@/lib/creative-runtime-contract";
 import { readJsonDataFile, writeJsonDataFile } from "@/lib/server/data-adapter";
 import { ensurePostgresSchema, withPostgresTransaction, type QueryExecutor } from "@/lib/server/database";
 import type { StoredGenerationTaskRecord } from "@/lib/server/generation-task-store";
@@ -309,7 +318,7 @@ export function nextMessageSequence(messages: CreativeMessage[], conversationId:
 }
 
 export function normalizeTaskStatus(status: string): StoredGenerationTaskRecord["status"] {
-    if (["planning", "queued", "created", "pending"].includes(status)) return "pending";
+    if (["planning", "queued", "created", "pending", "awaiting_confirmation"].includes(status)) return "pending";
     if (["processing", "in_progress", "running"].includes(status)) return "running";
     if (["completed", "succeeded", "success"].includes(status)) return "success";
     if (status === "paused") return "paused";
@@ -318,11 +327,12 @@ export function normalizeTaskStatus(status: string): StoredGenerationTaskRecord[
 }
 
 export function mapConversation(row: Record<string, unknown>): CreativeConversation {
+    const surface = normalizeCreativeSurface(row.surface) || "chat";
     return {
         id: dbText(row.id),
         userId: dbText(row.user_id),
-        surface: row.surface === "canvas" || row.surface === "drama" ? row.surface : "chat",
-        source: normalizeCreativeConversationSource(row.source) || creativeConversationSourceForSurface(row.surface === "canvas" || row.surface === "drama" ? row.surface : "chat"),
+        surface,
+        source: normalizeCreativeConversationSource(row.source) || creativeConversationSourceForSurface(surface),
         projectId: dbOptionalText(row.project_id),
         title: dbText(row.title),
         status: row.status === "archived" ? "archived" : "active",

@@ -1,5 +1,13 @@
 type JsonRecord = Record<string, unknown>;
 
+export const ADMIN_ACCOUNT_CONFIG_BACKUP_SCOPE = Object.freeze({
+    mode: "account-config" as const,
+    restoreStrategy: "merge-no-delete" as const,
+    disasterRecovery: false,
+    included: Object.freeze(["accounts-and-settings", "prompts", "generation-logs", "account-deletion-requests"] as const),
+    excluded: Object.freeze(["canvas-projects", "design-projects", "creative-runtime", "generation-tasks", "library-assets", "drama-projects", "media-binaries", "object-storage-manifest"] as const),
+});
+
 export function sanitizeAuthBackup(value: unknown) {
     if (!isRecord(value)) return value;
     const settings = isRecord(value.settings) ? sanitizeSettings(value.settings) : value.settings;

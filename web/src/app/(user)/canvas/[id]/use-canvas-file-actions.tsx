@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { nanoid } from "nanoid";
 import { useCallback, useEffect } from "react";
 
 import { uploadMediaFile } from "@/services/file-storage";
@@ -22,6 +23,7 @@ export function useCanvasFileActions({ state, interactions }: { state: CanvasPag
     const {
         message,
         setNodes,
+        setConnections,
         size,
         setSelectedNodeIds,
         selectedConnectionId,
@@ -37,6 +39,7 @@ export function useCanvasFileActions({ state, interactions }: { state: CanvasPag
         setCropNodeId,
         setMaskEditNodeId,
         nodesRef,
+        connectionsRef,
         selectedNodeIdsRef,
     } = state;
     const { getCanvasCenter, setConnecting, deleteNodes, deleteConnection, copySelectedNodes, pasteCopiedNodes, undoCanvas, redoCanvas } = interactions;
@@ -102,6 +105,47 @@ export function useCanvasFileActions({ state, interactions }: { state: CanvasPag
         setSelectedNodeIds(new Set([id]));
         setSelectedConnectionId(null);
     }, []);
+
+    const createReferenceMediaNodes = useCallback(
+        async (targetNodeId: string, files: File[]) => {
+            const accepted = files.filter(isComposerReferenceFile).slice(0, 20);
+            if (!accepted.length) return;
+            const uploaded = await Promise.all(
+                accepted.map(async (file) => (file.type.startsWith("video/") ? ({ kind: "video", file, media: await uploadMediaFile(file, "video") } as const) : ({ kind: "image", file, media: await uploadCanvasImage(file) } as const))),
+            );
+            const target = nodesRef.current.find((node) => node.id === targetNodeId);
+            if (!target) {
+                message.warning("目标节点已不存在，参考素材未添加");
+                return;
+            }
+            const existingCount = connectionsRef.current.filter((connection) => connection.toNodeId === targetNodeId).length;
+            const referenceNodes = uploaded.map(({ file, kind, media }, index) => {
+                const fitted = fitNodeSize(media.width || 1280, media.height || 720, kind === "video" ? VIDEO_NODE_MAX_WIDTH : undefined, kind === "video" ? VIDEO_NODE_MAX_HEIGHT : undefined);
+                const column = Math.floor((existingCount + index) / 3);
+                const row = (existingCount + index) % 3;
+                const id = `${kind}-${Date.now()}-${nanoid(7)}`;
+                return {
+                    id,
+                    type: kind === "video" ? CanvasNodeType.Video : CanvasNodeType.Image,
+                    title: file.name,
+                    position: {
+                        x: target.position.x - fitted.width - 96 - column * (fitted.width + 36),
+                        y: target.position.y + row * (fitted.height + 36),
+                    },
+                    width: fitted.width,
+                    height: fitted.height,
+                    metadata: kind === "video" ? videoMetadata(media) : imageMetadata(media),
+                } satisfies CanvasNodeData;
+            });
+            const nextConnections = referenceNodes.map((node) => ({ id: nanoid(), fromNodeId: node.id, toNodeId: targetNodeId }));
+            nodesRef.current = [...nodesRef.current, ...referenceNodes];
+            connectionsRef.current = [...connectionsRef.current, ...nextConnections];
+            setNodes(nodesRef.current);
+            setConnections(connectionsRef.current);
+            message.success(referenceNodes.length === 1 ? "参考素材已连接到当前节点" : `${referenceNodes.length} 个参考素材已连接到当前节点`);
+        },
+        [connectionsRef, message, nodesRef, setConnections, setNodes],
+    );
 
     const createTextNodeFromClipboard = useCallback(
         (text: string) => {
@@ -216,9 +260,14 @@ export function useCanvasFileActions({ state, interactions }: { state: CanvasPag
         createImageFileNode,
         createVideoFileNode,
         createAudioFileNode,
+        createReferenceMediaNodes,
         createTextNodeFromClipboard,
         pasteSystemClipboard,
     };
 }
 
 export type CanvasFileActions = ReturnType<typeof useCanvasFileActions>;
+
+function isComposerReferenceFile(file: File) {
+    return /^image\/(?:png|jpeg|webp)$/i.test(file.type) || /^video\/(?:mp4|webm|quicktime)$/i.test(file.type);
+}

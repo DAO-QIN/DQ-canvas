@@ -1,27 +1,38 @@
 "use client";
 
-import { Button, Input, Popover, Tooltip } from "antd";
+import { Button, Input, Modal, Popover, Switch, Tooltip } from "antd";
 import type { TextAreaRef } from "antd/es/input/TextArea";
-import { ArrowUp, Boxes, Check, ChevronLeft, ChevronRight, FileAudio, FileVideo, ImageIcon, Lightbulb, LoaderCircle, Orbit, Paperclip, Sparkles, Square, X } from "lucide-react";
-import { useEffect, useRef, useState, type MouseEventHandler, type PointerEventHandler, type RefObject, type WheelEvent } from "react";
+import { ArrowUp, AtSign, Boxes, Check, ChevronDown, Circle, Clock3, FileAudio, FileAudio2, FileText, FileVideo, ImageIcon, Link2, LoaderCircle, Maximize2, Plus, Settings2, Sparkles, Square, Video, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 
+import { VoiceInputButton } from "@/components/conversation/voice-input-button";
+import { ModelPicker } from "@/components/model-picker";
+import { canvasThemes } from "@/lib/canvas-theme";
 import type { CreativeAsset } from "@/lib/creative-runtime-contract";
 import { clipboardImageFiles } from "@/lib/clipboard-image-files";
+import type { CreateOverviewAsset } from "@/lib/create-workbench-overview";
+import { parseImageDimensions } from "@/lib/image-size";
+import { imagePreviewUrl } from "@/lib/media-image-url";
+import { normalizeSeedanceRatio } from "@/lib/seedance-video";
 import { cn } from "@/lib/utils";
-import { CreativeAgentTextModelPicker } from "@/components/agent/creative-agent-controls";
+import { getCreateWorkbenchOverview } from "@/services/api/create-workbench-overview";
+import type { AiConfig } from "@/stores/use-config-store";
+import { useThemeStore } from "@/stores/use-theme-store";
+
+import { creationModeLabels, creationModePlaceholders, type CreationMode, type DirectCreationMode } from "../creation-mode";
+import type { DirectVideoMethod } from "../use-direct-creation";
 
 type SkillOption = {
     id: string;
     name: string;
     description: string;
     action?: "generate" | "edit";
-    workspaces?: Array<"image" | "video" | "canvas" | "drama">;
+    workspaces?: Array<"image" | "video" | "canvas" | "design" | "drama">;
 };
-type ModelOption = { id: string; name: string; capability: "image" | "video" | "audio" };
-type ModelCapability = ModelOption["capability"];
-type SkillCategory = "all" | "image" | "video" | "canvas" | "drama" | "edit";
 
+type MentionDraft = { start: number; end: number; query: string };
 export function CreativeComposer({
+    mode,
     inputRef,
     value,
     busy,
@@ -34,20 +45,21 @@ export function CreativeComposer({
     skills,
     skillsLoading,
     selectedSkill,
-    models,
-    selectedModels,
-    smartPlanning,
-    agentModelId,
     uploading,
     onRemoveAttachment,
     onSelectSkill,
     onRemoveSkill,
-    onToggleModel,
-    onClearModels,
-    onToggleSmartPlanning,
-    onAgentModelChange,
+    config,
+    onModeChange,
+    onConfigChange,
+    videoCount,
+    onVideoCountChange,
+    videoMethod,
+    onVideoMethodChange,
+    onMentionRecentAsset,
     centered = false,
 }: {
+    mode: CreationMode;
     inputRef: RefObject<TextAreaRef | null>;
     value: string;
     busy: boolean;
@@ -60,335 +72,161 @@ export function CreativeComposer({
     skills: SkillOption[];
     skillsLoading: boolean;
     selectedSkill?: SkillOption;
-    models: ModelOption[];
-    selectedModels: ModelOption[];
-    smartPlanning: boolean;
-    agentModelId?: string;
     uploading: boolean;
     onRemoveAttachment: (id: string) => void;
     onSelectSkill: (skill: SkillOption) => void;
     onRemoveSkill: () => void;
-    onToggleModel: (model: ModelOption) => void;
-    onClearModels: () => void;
-    onToggleSmartPlanning: () => void;
-    onAgentModelChange: (model: string) => void;
+    config: AiConfig;
+    onModeChange: (mode: CreationMode) => void;
+    onConfigChange: (key: "textModel" | "imageModel" | "videoModel" | "quality" | "size" | "count" | "vquality" | "videoSeconds" | "videoGenerateAudio" | "videoWatermark", value: string) => void;
+    videoCount: number;
+    onVideoCountChange: (value: number) => void;
+    videoMethod: DirectVideoMethod;
+    onVideoMethodChange: (value: DirectVideoMethod) => void;
+    onMentionRecentAsset: (asset: CreateOverviewAsset) => Promise<boolean>;
     centered?: boolean;
 }) {
-    const [skillPickerOpen, setSkillPickerOpen] = useState(false);
-    const [skillCategory, setSkillCategory] = useState<SkillCategory>("all");
-    const { scrollRef: skillCategoryScrollRef, dragScrollProps: skillCategoryDragScrollProps } = useHorizontalMouseDragScroll<HTMLDivElement>();
-    const [modelPickerOpen, setModelPickerOpen] = useState(false);
-    const [modelCategory, setModelCategory] = useState<ModelCapability>("image");
-    const selectedModelCapability = selectedModels[0]?.capability;
+    const visibleSkills = skills.filter((skill) => skillAvailableInMode(skill, mode));
+    const [mentionOpen, setMentionOpen] = useState(false);
+    const [mentionDraft, setMentionDraft] = useState<MentionDraft | null>(null);
+    const [recentAssets, setRecentAssets] = useState<CreateOverviewAsset[]>([]);
+    const [recentAssetsLoading, setRecentAssetsLoading] = useState(false);
+    const [recentAssetsError, setRecentAssetsError] = useState("");
+    const [mentioningAssetId, setMentioningAssetId] = useState("");
+    const valueRef = useRef(value);
+    const mentionDraftRef = useRef<MentionDraft | null>(null);
+    valueRef.current = value;
+    mentionDraftRef.current = mentionDraft;
+
+    const loadRecentAssets = useCallback(async () => {
+        setRecentAssetsLoading(true);
+        setRecentAssetsError("");
+        try {
+            const overview = await getCreateWorkbenchOverview();
+            setRecentAssets(overview.recentAssets);
+        } catch (error) {
+            setRecentAssetsError(error instanceof Error ? error.message : "最近生成内容加载失败");
+        } finally {
+            setRecentAssetsLoading(false);
+        }
+    }, []);
 
     useEffect(() => {
-        if (selectedModelCapability) setModelCategory(selectedModelCapability);
-    }, [selectedModelCapability]);
+        if (mentionOpen) void loadRecentAssets();
+    }, [loadRecentAssets, mentionOpen]);
 
-    const skillCategories = skillCategoryOptions(skills);
-    const visibleSkills = skills.filter((skill) => matchesSkillCategory(skill, skillCategory));
+    const updatePromptFromInput = (nextValue: string, caret: number) => {
+        onChange(nextValue);
+        const draft = mentionDraftAt(nextValue, caret);
+        setMentionDraft(draft);
+        if (draft) setMentionOpen(true);
+        else if (mentionDraftRef.current) setMentionOpen(false);
+    };
+
+    const insertMention = async (asset: CreateOverviewAsset) => {
+        setMentioningAssetId(asset.id);
+        const imported = await onMentionRecentAsset(asset);
+        setMentioningAssetId("");
+        if (!imported) return;
+
+        const currentValue = valueRef.current;
+        const currentDraft = mentionDraftRef.current;
+        const textarea = inputRef.current?.resizableTextArea?.textArea;
+        const caret = textarea?.selectionStart ?? currentValue.length;
+        const start = currentDraft?.start ?? caret;
+        const end = currentDraft?.end ?? caret;
+        const label = mentionLabel(asset);
+        const needsLeadingSpace = start > 0 && !/\s/.test(currentValue[start - 1] || "");
+        const token = `${needsLeadingSpace ? " " : ""}@${label} `;
+        const nextValue = `${currentValue.slice(0, start)}${token}${currentValue.slice(end)}`;
+        const nextCaret = start + token.length;
+        onChange(nextValue);
+        setMentionDraft(null);
+        mentionDraftRef.current = null;
+        setMentionOpen(false);
+        window.requestAnimationFrame(() => {
+            const nextTextarea = inputRef.current?.resizableTextArea?.textArea;
+            nextTextarea?.focus();
+            nextTextarea?.setSelectionRange(nextCaret, nextCaret);
+        });
+    };
 
     return (
         <div className={cn("mx-auto w-full", centered ? "max-w-[960px]" : "max-w-[1120px] px-3 pb-3 sm:px-6 sm:pb-5")}>
-            <div className="creative-composer rounded-[14px] border border-[#dde2e7] bg-white p-2 shadow-[0_14px_38px_rgba(32,36,42,0.09)] dark:border-[#30363e] dark:bg-[#181b20] dark:shadow-black/30">
-                {selectedSkill || attachments.length || uploading ? (
-                    <div className="flex gap-2 overflow-x-auto px-2 pb-1 pt-1">
-                        {selectedSkill ? (
-                            <span className="flex h-9 max-w-60 shrink-0 items-center gap-2 rounded-lg border border-[#d6dee8] bg-[#f1f4f8] px-2.5 text-xs font-medium text-[#344152] shadow-[0_2px_8px_rgba(38,49,65,0.07)] dark:border-[#3b4653] dark:bg-[#252b33] dark:text-[#edf1f5] dark:shadow-black/20">
-                                <span className="grid size-5 shrink-0 place-items-center rounded-md bg-[#d3a44f]/16 text-[#95681d] dark:bg-[#e4bb70]/14 dark:text-[#e4bb70]">
-                                    <Sparkles className="size-3.5" />
-                                </span>
-                                <span className="truncate">Skill · {selectedSkill.name}</span>
-                                <button
-                                    type="button"
-                                    className="grid size-5 shrink-0 place-items-center rounded-md text-[#7c8795] transition hover:bg-[#dfe5ec] hover:text-[#263141] dark:text-[#aab3bf] dark:hover:bg-[#343c46] dark:hover:text-white"
-                                    onClick={onRemoveSkill}
-                                    aria-label={`移除 Skill ${selectedSkill.name}`}
-                                    title="移除 Skill"
-                                >
-                                    <X className="size-3" />
-                                </button>
-                            </span>
-                        ) : null}
-                        {attachments.map((asset) => {
-                            const Icon = asset.type === "image" ? ImageIcon : asset.type === "video" ? FileVideo : FileAudio;
-                            return (
-                                <span key={asset.id} className="flex h-9 max-w-52 shrink-0 items-center gap-2 rounded-md border border-stone-200 bg-stone-50 px-2 text-xs text-stone-700 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-200">
-                                    <Icon className="size-3.5 shrink-0" />
-                                    <span className="truncate">{asset.title}</span>
-                                    <button
-                                        type="button"
-                                        className="grid size-5 shrink-0 place-items-center rounded text-stone-400 hover:bg-stone-200 hover:text-stone-800 dark:hover:bg-stone-700 dark:hover:text-white"
-                                        onClick={() => onRemoveAttachment(asset.id)}
-                                        aria-label={`移除${asset.title}`}
-                                    >
-                                        <X className="size-3" />
-                                    </button>
-                                </span>
-                            );
-                        })}
-                        {uploading ? (
-                            <span className="flex h-9 shrink-0 items-center gap-2 px-2 text-xs text-stone-500 dark:text-stone-400">
-                                <LoaderCircle className="size-3.5 animate-spin" /> 上传中
-                            </span>
-                        ) : null}
-                    </div>
-                ) : null}
-                <Input.TextArea
-                    ref={inputRef}
-                    value={value}
-                    maxLength={4000}
-                    autoSize={{ minRows: centered ? 3 : 2, maxRows: 8 }}
-                    variant="borderless"
-                    className="creative-composer-input !border-0 !bg-transparent !px-3 !py-2 !text-[15px] !leading-7 !shadow-none !outline-none"
-                    placeholder="描述你的想法，或添加参考素材"
-                    onChange={(event) => onChange(event.target.value)}
-                    onPaste={(event) => {
-                        const files = clipboardImageFiles(event.clipboardData);
-                        if (!files.length) return;
-                        event.preventDefault();
-                        onPasteImages(files);
-                    }}
-                    onPressEnter={(event) => {
-                        if (event.shiftKey) return;
-                        event.preventDefault();
-                        if (!busy) onSubmit();
-                    }}
-                />
-                <div className="flex items-center gap-2 px-1 pb-1">
-                    <Tooltip title="添加素材">
-                        <Button type="text" shape="circle" className="!size-9 !min-w-9" icon={<Paperclip className="size-4" />} onClick={onAttachment} loading={uploading} aria-label="添加素材" />
+            <div className="creative-composer rounded-[18px] border border-[#dde2e7] bg-white p-2 shadow-[0_14px_38px_rgba(32,36,42,0.09)] dark:border-[#30363e] dark:bg-[#181b20] dark:shadow-black/30">
+                <div className="grid grid-cols-[58px_minmax(0,1fr)] items-start gap-3 px-2 pt-2 sm:grid-cols-[64px_minmax(0,1fr)] sm:gap-4">
+                    <Tooltip title="添加参考内容">
+                        <button
+                            type="button"
+                            className="flex h-[68px] w-[56px] -rotate-3 flex-col items-center justify-center gap-1 rounded-xl border border-[#d9dfe6] bg-[#f0f2f5] text-[#626d7a] shadow-sm transition hover:-translate-y-0.5 hover:bg-[#e9edf1] hover:text-[#20242a] disabled:cursor-wait disabled:opacity-55 sm:w-[62px] dark:border-[#343b44] dark:bg-[#252a31] dark:text-[#aab3bf] dark:hover:bg-[#2c323a] dark:hover:text-white"
+                            onClick={onAttachment}
+                            disabled={uploading || busy}
+                            aria-label="添加参考内容"
+                        >
+                            {uploading ? <LoaderCircle className="size-5 animate-spin" /> : <Plus className="size-5" />}
+                            <span className="text-[10px] font-medium">参考内容</span>
+                        </button>
                     </Tooltip>
-                    <Popover
-                        trigger="click"
-                        placement="topLeft"
-                        open={skillPickerOpen}
-                        onOpenChange={setSkillPickerOpen}
-                        content={
-                            <div className="w-[calc(100vw-56px)] max-w-[300px] py-1 sm:w-80 sm:max-w-none">
-                                <p className="px-2 pb-2 text-sm font-semibold text-[#20242a] dark:text-[#f3f5f7]">选择创作 Skill</p>
-                                {skillsLoading ? <p className="px-2 py-3 text-xs text-[#8b949f] dark:text-[#7f8996]">正在加载...</p> : null}
-                                {!skillsLoading && !skills.length ? <p className="px-2 py-3 text-xs text-[#8b949f] dark:text-[#7f8996]">暂无可用 Skill</p> : null}
-                                {skills.length ? (
-                                    <div className="mb-2 grid grid-cols-[28px_minmax(0,1fr)_28px] items-center gap-1">
-                                        <button
-                                            type="button"
-                                            className="grid size-7 place-items-center rounded-md text-[#7c8794] transition hover:bg-[#eef1f4] hover:text-[#20242a] disabled:cursor-default disabled:opacity-30 dark:text-[#929ca8] dark:hover:bg-[#292f37] dark:hover:text-white"
-                                            onClick={() => skillCategoryScrollRef.current?.scrollBy({ left: -180, behavior: "smooth" })}
-                                            aria-label="向左查看更多 Skill 分类"
-                                        >
-                                            <ChevronLeft className="size-4" />
-                                        </button>
-                                        <div
-                                            ref={skillCategoryScrollRef}
-                                            className="hide-scrollbar flex min-w-0 cursor-grab snap-x gap-1.5 overflow-x-auto overscroll-x-contain px-0.5 [touch-action:pan-x] active:cursor-grabbing"
-                                            onWheel={scrollHorizontalCategories}
-                                            {...skillCategoryDragScrollProps}
-                                            role="tablist"
-                                            aria-label="Skill 分类，可左右滑动查看更多"
-                                        >
-                                            {skillCategories.map((category) => (
-                                                <button
-                                                    key={category.id}
-                                                    type="button"
-                                                    role="tab"
-                                                    aria-selected={skillCategory === category.id}
-                                                    className={cn(
-                                                        "h-8 min-w-[72px] shrink-0 snap-start whitespace-nowrap rounded-lg border px-3 text-xs font-medium transition",
-                                                        skillCategory === category.id
-                                                            ? "border-[#c9d7e2] bg-[#edf3f7] text-[#315d78] dark:border-[#466175] dark:bg-[#273742] dark:text-[#a8c8dc]"
-                                                            : "border-[#e0e4e8] bg-white text-[#66717e] hover:border-[#cbd2d9] hover:bg-[#f5f7f8] hover:text-[#20242a] dark:border-[#343a42] dark:bg-[#1d2127] dark:text-[#a3acb7] dark:hover:border-[#49515b] dark:hover:bg-[#292f37] dark:hover:text-white",
-                                                    )}
-                                                    onClick={() => setSkillCategory(category.id)}
-                                                >
-                                                    {category.label} · {category.count}
-                                                </button>
-                                            ))}
-                                        </div>
-                                        <button
-                                            type="button"
-                                            className="grid size-7 place-items-center rounded-md text-[#7c8794] transition hover:bg-[#eef1f4] hover:text-[#20242a] dark:text-[#929ca8] dark:hover:bg-[#292f37] dark:hover:text-white"
-                                            onClick={() => skillCategoryScrollRef.current?.scrollBy({ left: 180, behavior: "smooth" })}
-                                            aria-label="向右查看更多 Skill 分类"
-                                        >
-                                            <ChevronRight className="size-4" />
-                                        </button>
-                                    </div>
-                                ) : null}
-                                <div className="relative">
-                                    <div className="hide-scrollbar max-h-[142px] space-y-1 overflow-y-auto overscroll-contain [scrollbar-width:none] sm:max-h-[154px] [&::-webkit-scrollbar]:hidden">
-                                        {!skillsLoading && skills.length && !visibleSkills.length ? <p className="px-2 py-5 text-center text-xs text-[#8b949f] dark:text-[#7f8996]">当前分类暂无可用 Skill</p> : null}
-                                        {visibleSkills.map((skill) => {
-                                            const selected = selectedSkill?.id === skill.id;
-                                            const visual = skillOptionVisual(skill);
-                                            const Icon = visual.icon;
-                                            return (
-                                                <button
-                                                    key={skill.id}
-                                                    type="button"
-                                                    className={cn(
-                                                        "flex w-full items-start gap-2 rounded-lg px-2 py-2 text-left transition",
-                                                        selected ? "bg-[#eef1f4] text-[#20242a] dark:bg-[#292f37] dark:text-white" : "text-[#4d5662] hover:bg-[#f4f6f8] dark:text-[#c2c9d1] dark:hover:bg-[#242930]",
-                                                    )}
-                                                    onClick={() => {
-                                                        onSelectSkill(skill);
-                                                        setSkillPickerOpen(false);
-                                                    }}
-                                                >
-                                                    <span className={cn("mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg", visual.surfaceClass)}>
-                                                        <Icon className={cn("size-3.5", visual.iconClass)} />
-                                                    </span>
-                                                    <span className="min-w-0 flex-1">
-                                                        <span className="block truncate text-xs font-medium">{skill.name}</span>
-                                                        <span className="mt-0.5 line-clamp-2 block text-[11px] leading-4 text-[#8b949f] dark:text-[#7f8996]">{skill.description}</span>
-                                                    </span>
-                                                    {selected ? <Check className="mt-0.5 size-4 shrink-0" /> : null}
-                                                </button>
-                                            );
-                                        })}
-                                    </div>
-                                </div>
-                            </div>
-                        }
-                    >
-                        <Button type="text" shape="circle" className={cn("!size-9 !min-w-9", selectedSkill && "!bg-[#eef1f4] !text-[#20242a] dark:!bg-[#292f37] dark:!text-white")} icon={<Boxes className="size-4" />} aria-label="选择创作 Skill" />
-                    </Popover>
-                    <span className="min-w-0 flex-1" />
-                    <Tooltip title={smartPlanning ? "智能规划：已开启" : "智能规划：已关闭"}>
-                        <Button
-                            type="text"
-                            shape="circle"
-                            className={cn(
-                                "!size-9 !min-w-9 transition-colors",
-                                smartPlanning
-                                    ? "!bg-[#e9f1f7] !text-[#386783] hover:!bg-[#dce9f2] hover:!text-[#274f69] dark:!bg-[#6f9fbd]/16 dark:!text-[#8eb8d1] dark:hover:!bg-[#6f9fbd]/24"
-                                    : "!bg-transparent !text-[#8b949f] hover:!bg-[#eef1f4] hover:!text-[#20242a] dark:!text-[#77818d] dark:hover:!bg-[#292f37] dark:hover:!text-white",
-                            )}
-                            icon={<Lightbulb className="size-4" />}
-                            aria-label={smartPlanning ? "智能规划已开启，点击关闭" : "智能规划已关闭，点击开启"}
-                            aria-pressed={smartPlanning}
-                            onClick={() => {
-                                onToggleSmartPlanning();
-                                if (smartPlanning) setModelPickerOpen(true);
+                    <div className="min-w-0">
+                        {selectedSkill || attachments.length ? <ComposerReferences selectedSkill={selectedSkill} attachments={attachments} onRemoveSkill={onRemoveSkill} onRemoveAttachment={onRemoveAttachment} /> : null}
+                        <Input.TextArea
+                            ref={inputRef}
+                            value={value}
+                            maxLength={4000}
+                            autoSize={{ minRows: centered ? 3 : 2, maxRows: 8 }}
+                            variant="borderless"
+                            className="creative-composer-input !border-0 !bg-transparent !px-0 !py-0 !text-[15px] !leading-7 !shadow-none !outline-none"
+                            placeholder={creationModePlaceholders[mode]}
+                            onChange={(event) => updatePromptFromInput(event.target.value, event.target.selectionStart ?? event.target.value.length)}
+                            onPaste={(event) => {
+                                const files = clipboardImageFiles(event.clipboardData);
+                                if (!files.length) return;
+                                event.preventDefault();
+                                onPasteImages(files);
+                            }}
+                            onPressEnter={(event) => {
+                                if (event.shiftKey) return;
+                                event.preventDefault();
+                                if (!busy) onSubmit();
                             }}
                         />
-                    </Tooltip>
-                    <CreativeAgentTextModelPicker value={agentModelId} onChange={onAgentModelChange} disabled={busy} disabledTitle="Agent 正在运行，暂时不能切换智能体模型" className="!size-9 !min-w-9 !text-[#6f7b89] dark:!text-[#96a0ac]" />
-                    <Popover
-                        trigger="click"
-                        placement="topRight"
-                        open={modelPickerOpen}
-                        onOpenChange={setModelPickerOpen}
-                        content={
-                            <div className="w-[calc(100vw-56px)] max-w-[300px] py-1 sm:w-80 sm:max-w-none">
-                                <div className="flex items-center justify-between gap-3 px-2 pb-3">
-                                    <div className="min-w-0">
-                                        <p className="text-sm font-semibold text-[#20242a] dark:text-[#f3f5f7]">生成模型</p>
-                                        <p className="mt-0.5 truncate text-[11px] text-[#8b949f] dark:text-[#7f8996]">
-                                            {selectedModels.length ? `已选择 ${selectedModels.length} 个模型` : smartPlanning ? "默认由智能规划自动匹配" : "未锁定媒体模型，由 Agent 自动匹配"}
-                                        </p>
-                                    </div>
-                                    <button
-                                        type="button"
-                                        role="switch"
-                                        aria-checked={smartPlanning}
-                                        aria-label={smartPlanning ? "关闭自动智能规划" : "开启自动智能规划"}
-                                        className={cn(
-                                            "flex shrink-0 items-center gap-2 rounded-lg px-1.5 py-1 text-xs font-medium transition-colors",
-                                            smartPlanning ? "bg-[#edf4f9] text-[#315f7d] dark:bg-[#6f9fbd]/12 dark:text-[#8eb8d1]" : "text-[#7f8995] hover:bg-[#f2f4f6] dark:text-[#8b95a1] dark:hover:bg-[#292f37]",
-                                        )}
-                                        onClick={onToggleSmartPlanning}
-                                    >
-                                        <span>{smartPlanning ? "已开启" : "已关闭"}</span>
-                                        <span
-                                            className={cn(
-                                                "relative h-5 w-9 rounded-full border transition-colors",
-                                                smartPlanning ? "border-[#4f7f9d] bg-[#4f7f9d] dark:border-[#78a8c5] dark:bg-[#78a8c5]" : "border-[#cbd2da] bg-[#dfe3e8] dark:border-[#505966] dark:bg-[#3a414a]",
-                                            )}
-                                        >
-                                            <span className={cn("absolute left-0.5 top-0.5 size-4 rounded-full bg-white shadow-sm transition-transform dark:bg-[#20242a]", smartPlanning && "translate-x-4")} />
-                                        </span>
-                                    </button>
-                                </div>
-                                <div className="grid grid-cols-3 gap-1 rounded-lg bg-[#eef1f4] p-1 dark:bg-[#252a31]">
-                                    {(["image", "video", "audio"] as const).map((capability) => {
-                                        const label = capabilityLabel(capability);
-                                        const count = models.filter((model) => model.capability === capability).length;
-                                        return (
-                                            <button
-                                                key={capability}
-                                                type="button"
-                                                className={cn(
-                                                    "h-8 rounded-md text-xs font-medium transition",
-                                                    modelCategory === capability ? "bg-white text-[#20242a] shadow-sm dark:bg-[#343b44] dark:text-white" : "text-[#7b8591] hover:text-[#20242a] dark:text-[#8f99a5] dark:hover:text-white",
-                                                )}
-                                                onClick={() => setModelCategory(capability)}
-                                            >
-                                                {label} {count ? `· ${count}` : ""}
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                                <div className="hide-scrollbar mt-2 max-h-52 space-y-1 overflow-y-auto sm:max-h-64">
-                                    {!models.some((model) => model.capability === modelCategory) ? <p className="px-2 py-5 text-center text-xs text-[#8b949f] dark:text-[#7f8996]">当前未配置可用的{capabilityLabel(modelCategory)}模型</p> : null}
-                                    {models
-                                        .filter((model) => model.capability === modelCategory)
-                                        .map((model) => {
-                                            const selected = selectedModels.some((item) => item.id === model.id);
-                                            return (
-                                                <button
-                                                    key={model.id}
-                                                    type="button"
-                                                    className={cn(
-                                                        "flex w-full items-start gap-2 rounded-lg px-2 py-2 text-left transition",
-                                                        selected ? "bg-[#eef1f4] text-[#20242a] dark:bg-[#292f37] dark:text-white" : "text-[#4d5662] hover:bg-[#f4f6f8] dark:text-[#c2c9d1] dark:hover:bg-[#242930]",
-                                                    )}
-                                                    onClick={() => onToggleModel(model)}
-                                                >
-                                                    <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-md bg-white text-[#465365] shadow-sm dark:bg-[#343b44] dark:text-[#e6eaf0]">
-                                                        <ModelPlatformIcon model={model} />
-                                                    </span>
-                                                    <span className="min-w-0 flex-1">
-                                                        <span className="block truncate text-xs font-medium">{model.name}</span>
-                                                        <span className="mt-0.5 block text-[11px] leading-4 text-[#8b949f] dark:text-[#7f8996]">{capabilityLabel(model.capability)}模型 · 可与其他模型同时生成</span>
-                                                    </span>
-                                                    <span
-                                                        className={cn(
-                                                            "mt-0.5 grid size-4 shrink-0 place-items-center rounded border",
-                                                            selected ? "border-[#20242a] bg-[#20242a] text-white dark:border-white dark:bg-white dark:text-[#20242a]" : "border-[#cbd2da] text-transparent dark:border-[#505966]",
-                                                        )}
-                                                    >
-                                                        <Check className="size-3" />
-                                                    </span>
-                                                </button>
-                                            );
-                                        })}
-                                </div>
-                                {!smartPlanning && selectedModels.length ? (
-                                    <button
-                                        type="button"
-                                        className="mt-2 w-full rounded-lg px-2 py-2 text-xs font-medium text-[#6d7784] transition hover:bg-[#f3f5f7] hover:text-[#20242a] dark:text-[#98a2ae] dark:hover:bg-[#252a31] dark:hover:text-white"
-                                        onClick={onClearModels}
-                                    >
-                                        清除选择并恢复智能规划
-                                    </button>
-                                ) : null}
-                            </div>
-                        }
-                    >
-                        <Button
-                            type="text"
-                            shape="circle"
-                            className={cn("relative !size-9 !min-w-9 !text-[#6f7b89] dark:!text-[#96a0ac]", selectedModels.length && "!bg-[#eef1f4] !text-[#20242a] dark:!bg-[#292f37] dark:!text-white")}
-                            icon={<Orbit className="size-4" />}
-                            aria-label="选择生成模型"
-                            title={selectedModels.length ? `已选择 ${selectedModels.length} 个模型` : "选择生成模型"}
-                        >
-                            {selectedModels.length ? (
-                                <span className="absolute -right-0.5 -top-0.5 grid size-4 place-items-center rounded-full bg-[#20242a] text-[9px] font-semibold text-white dark:bg-white dark:text-[#20242a]">{selectedModels.length}</span>
+                    </div>
+                </div>
+                <div className="mt-1 flex items-center gap-1 px-1 pb-1 sm:gap-2">
+                    <SkillPicker mode={mode} skills={visibleSkills} loading={skillsLoading} selectedSkill={selectedSkill} onSelect={onSelectSkill} />
+                    <CreationModePicker mode={mode} onChange={onModeChange} disabled={busy} />
+                    {mode !== "agent" ? (
+                        <>
+                            <ModelPicker
+                                config={config}
+                                value={directModel(config, mode)}
+                                capability={mode}
+                                onChange={(model) => onConfigChange(directModelKey(mode), model)}
+                                className="!h-9 !w-9 !min-w-9 !rounded-lg !border-0 !bg-transparent !px-2 !shadow-none [&_.canvas-model-picker-text]:hidden hover:!bg-[#eef1f4] sm:!w-auto sm:!max-w-[180px] sm:[&_.canvas-model-picker-text]:block dark:hover:!bg-[#292f37]"
+                                placeholder={`选择${creationModeLabels[mode]}模型`}
+                            />
+                            {mode === "image" || mode === "video" ? (
+                                <DirectGenerationSettings mode={mode} config={config} onConfigChange={onConfigChange} videoCount={videoCount} onVideoCountChange={onVideoCountChange} videoMethod={videoMethod} onVideoMethodChange={onVideoMethodChange} />
                             ) : null}
-                        </Button>
-                    </Popover>
+                        </>
+                    ) : null}
+                    <RecentAssetMentionPicker
+                        mode={mode}
+                        assets={recentAssets}
+                        loading={recentAssetsLoading}
+                        error={recentAssetsError}
+                        open={mentionOpen}
+                        query={mentionDraft?.query || ""}
+                        mentioningAssetId={mentioningAssetId}
+                        onOpenChange={(open) => {
+                            setMentionOpen(open);
+                            if (!open) setMentionDraft(null);
+                        }}
+                        onRetry={() => void loadRecentAssets()}
+                        onSelect={(asset) => void insertMention(asset)}
+                    />
+                    <span className="min-w-0 flex-1" />
+                    <VoiceInputButton disabled={busy} onTranscribed={(text) => onChange(value.trim() ? `${value.trim()} ${text}` : text)} />
                     <Tooltip title={busy ? "停止生成" : "发送"}>
                         <Button
                             type="primary"
@@ -406,81 +244,749 @@ export function CreativeComposer({
     );
 }
 
-function capabilityLabel(capability: ModelCapability) {
-    return capability === "image" ? "图片" : capability === "video" ? "视频" : "音频";
+function RecentAssetMentionPicker({
+    mode,
+    assets,
+    loading,
+    error,
+    open,
+    query,
+    mentioningAssetId,
+    onOpenChange,
+    onRetry,
+    onSelect,
+}: {
+    mode: CreationMode;
+    assets: CreateOverviewAsset[];
+    loading: boolean;
+    error: string;
+    open: boolean;
+    query: string;
+    mentioningAssetId: string;
+    onOpenChange: (open: boolean) => void;
+    onRetry: () => void;
+    onSelect: (asset: CreateOverviewAsset) => void;
+}) {
+    const availableAssets = assets.filter((asset) => recentAssetAllowedInMode(asset, mode));
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    const filteredAssets = normalizedQuery ? availableAssets.filter((asset) => `${asset.title} ${recentAssetKindLabel(asset.kind)}`.toLocaleLowerCase().includes(normalizedQuery)) : availableAssets;
+
+    return (
+        <Popover
+            trigger="click"
+            placement="bottomRight"
+            arrow={false}
+            autoAdjustOverflow={false}
+            open={open}
+            onOpenChange={onOpenChange}
+            content={
+                <div className="w-[min(360px,calc(100vw-32px))] py-1">
+                    <div className="flex items-start justify-between gap-3 px-2 pb-2">
+                        <div className="min-w-0">
+                            <p className="text-sm font-semibold text-[#20242a] dark:text-[#f3f5f7]">引用最近生成</p>
+                            <p className="mt-0.5 text-[11px] text-[#8b949f] dark:text-[#7f8996]">选择后会加入当前输入框的参考素材</p>
+                        </div>
+                        {query ? <span className="max-w-28 truncate rounded-full bg-[#f0f2f5] px-2 py-0.5 text-[10px] text-[#687483] dark:bg-[#292f37] dark:text-[#aab3bf]">@{query}</span> : null}
+                    </div>
+                    {loading ? (
+                        <div className="flex items-center gap-2 px-2 py-5 text-xs text-[#8b949f] dark:text-[#7f8996]">
+                            <LoaderCircle className="size-4 animate-spin" />
+                            正在加载最近生成...
+                        </div>
+                    ) : null}
+                    {!loading && error ? (
+                        <div className="space-y-2 px-2 py-4 text-xs text-[#9b4d4d] dark:text-[#f0a4a4]">
+                            <p>{error}</p>
+                            <button type="button" className="rounded-md border border-current px-2 py-1 text-[11px] transition hover:bg-current/10" onClick={onRetry}>
+                                重试
+                            </button>
+                        </div>
+                    ) : null}
+                    {!loading && !error && !filteredAssets.length ? <p className="px-2 py-5 text-xs text-[#8b949f] dark:text-[#7f8996]">暂无可引用的最近生成内容</p> : null}
+                    {!loading && !error && filteredAssets.length ? (
+                        <div className="hide-scrollbar max-h-[min(52vh,360px)] space-y-1 overflow-y-auto px-1">
+                            {filteredAssets.map((asset) => {
+                                const image = asset.kind === "image" && asset.url;
+                                const Icon = asset.kind === "video" ? Video : FileAudio2;
+                                const selecting = mentioningAssetId === asset.id;
+                                return (
+                                    <button
+                                        key={asset.id}
+                                        type="button"
+                                        className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition hover:bg-[#f4f6f8] disabled:cursor-wait disabled:opacity-60 dark:hover:bg-[#242930]"
+                                        disabled={Boolean(mentioningAssetId)}
+                                        onClick={() => onSelect(asset)}
+                                    >
+                                        <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md border border-[#dfe3e8] bg-[#f2f4f6] text-[#687483] dark:border-[#343a42] dark:bg-[#252a31] dark:text-[#a9b2bd]">
+                                            {image ? <img src={imagePreviewUrl(asset.url, 160)} alt="" className="size-full object-cover" loading="lazy" referrerPolicy="no-referrer" /> : <Icon className="size-4" />}
+                                        </span>
+                                        <span className="min-w-0 flex-1">
+                                            <span className="block truncate text-xs font-medium text-[#344152] dark:text-[#edf1f5]">{asset.title || `${recentAssetKindLabel(asset.kind)}内容`}</span>
+                                            <span className="mt-0.5 block text-[11px] text-[#8b949f] dark:text-[#7f8996]">
+                                                {recentAssetKindLabel(asset.kind)} · {formatRecentAssetDate(asset.createdAt)}
+                                            </span>
+                                        </span>
+                                        {selecting ? <LoaderCircle className="size-4 shrink-0 animate-spin text-[#667382]" /> : <AtSign className="size-3.5 shrink-0 text-[#9aa4b0]" />}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    ) : null}
+                </div>
+            }
+        >
+            <Tooltip title="引用最近生成">
+                <Button
+                    type="text"
+                    className={cn("!size-9 !min-w-9 !rounded-lg !px-2 !text-[#657180] hover:!bg-[#eef1f4] dark:!text-[#aab3bf] dark:hover:!bg-[#292f37]", open && "!bg-[#eef1f4] !text-[#20242a] dark:!bg-[#292f37] dark:!text-white")}
+                    icon={<AtSign className="size-4" />}
+                    aria-label="引用最近生成内容"
+                    aria-expanded={open}
+                />
+            </Tooltip>
+        </Popover>
+    );
 }
 
-function scrollHorizontalCategories(event: WheelEvent<HTMLDivElement>) {
-    if (event.currentTarget.scrollWidth <= event.currentTarget.clientWidth || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
-    event.preventDefault();
-    event.currentTarget.scrollLeft += event.deltaY;
+function SkillPicker({ mode, skills, loading, selectedSkill, onSelect }: { mode: CreationMode; skills: SkillOption[]; loading: boolean; selectedSkill?: SkillOption; onSelect: (skill: SkillOption) => void }) {
+    const [open, setOpen] = useState(false);
+    return (
+        <Popover
+            trigger="click"
+            placement="bottomLeft"
+            arrow={false}
+            open={open}
+            onOpenChange={setOpen}
+            content={
+                <div className="w-[calc(100vw-56px)] max-w-[320px] py-1 sm:w-80 sm:max-w-none">
+                    <div className="px-2 pb-2">
+                        <p className="text-sm font-semibold text-[#20242a] dark:text-[#f3f5f7]">选择创作 Skill</p>
+                        <p className="mt-0.5 text-[11px] text-[#8b949f] dark:text-[#7f8996]">仅显示适用于{creationModeLabels[mode]}的能力</p>
+                    </div>
+                    {loading ? <p className="px-2 py-4 text-xs text-[#8b949f] dark:text-[#7f8996]">正在加载...</p> : null}
+                    {!loading && !skills.length ? <p className="px-2 py-4 text-xs text-[#8b949f] dark:text-[#7f8996]">当前模式暂无可用 Skill</p> : null}
+                    <div className="hide-scrollbar max-h-64 space-y-1 overflow-y-auto">
+                        {skills.map((skill) => {
+                            const selected = selectedSkill?.id === skill.id;
+                            const visual = skillOptionVisual(skill);
+                            const Icon = visual.icon;
+                            return (
+                                <button
+                                    key={skill.id}
+                                    type="button"
+                                    className={cn(
+                                        "flex w-full items-start gap-2 rounded-lg px-2 py-2 text-left transition",
+                                        selected ? "bg-[#eef1f4] text-[#20242a] dark:bg-[#292f37] dark:text-white" : "text-[#4d5662] hover:bg-[#f4f6f8] dark:text-[#c2c9d1] dark:hover:bg-[#242930]",
+                                    )}
+                                    onClick={() => {
+                                        onSelect(skill);
+                                        setOpen(false);
+                                    }}
+                                >
+                                    <span className={cn("mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg", visual.surfaceClass)}>
+                                        <Icon className={cn("size-4", visual.iconClass)} />
+                                    </span>
+                                    <span className="min-w-0 flex-1">
+                                        <span className="block truncate text-xs font-medium">{skill.name}</span>
+                                        <span className="mt-0.5 line-clamp-2 block text-[11px] leading-4 text-[#8b949f] dark:text-[#7f8996]">{skill.description}</span>
+                                    </span>
+                                    {selected ? <Check className="mt-1 size-4 shrink-0" /> : null}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+            }
+        >
+            <Button
+                type="text"
+                className={cn("!h-9 !max-w-[116px] !rounded-lg !px-2 !text-[#596575] dark:!text-[#a8b1bd]", selectedSkill && "!bg-[#eef1f4] !text-[#20242a] dark:!bg-[#292f37] dark:!text-white")}
+                icon={<Boxes className="size-4" />}
+                aria-label={selectedSkill ? `已选择 Skill：${selectedSkill.name}` : "选择创作 Skill"}
+                aria-expanded={open}
+            >
+                <span className="truncate">Skill</span>
+            </Button>
+        </Popover>
+    );
 }
 
-function useHorizontalMouseDragScroll<T extends HTMLElement>() {
-    const scrollRef = useRef<T>(null);
-    const dragRef = useRef({ pointerId: -1, startX: 0, startScrollLeft: 0, moved: false });
-    const suppressClickRef = useRef(false);
-
-    const onPointerDown: PointerEventHandler<T> = (event) => {
-        if (event.pointerType !== "mouse" || event.button !== 0) return;
-        dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startScrollLeft: event.currentTarget.scrollLeft, moved: false };
-    };
-
-    const onPointerMove: PointerEventHandler<T> = (event) => {
-        const drag = dragRef.current;
-        if (drag.pointerId !== event.pointerId) return;
-        const distance = event.clientX - drag.startX;
-        if (!drag.moved && Math.abs(distance) < 4) return;
-        if (!drag.moved) {
-            drag.moved = true;
-            event.currentTarget.setPointerCapture(event.pointerId);
-        }
-        event.preventDefault();
-        event.currentTarget.scrollLeft = drag.startScrollLeft - distance;
-    };
-
-    const finishDrag: PointerEventHandler<T> = (event) => {
-        const drag = dragRef.current;
-        if (drag.pointerId !== event.pointerId) return;
-        if (drag.moved) {
-            suppressClickRef.current = true;
-            window.setTimeout(() => {
-                suppressClickRef.current = false;
-            }, 0);
-        }
-        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-        dragRef.current.pointerId = -1;
-    };
-
-    const onClickCapture: MouseEventHandler<T> = (event) => {
-        if (!suppressClickRef.current) return;
-        event.preventDefault();
-        event.stopPropagation();
-        suppressClickRef.current = false;
-    };
-
-    return {
-        scrollRef,
-        dragScrollProps: { onPointerDown, onPointerMove, onPointerUp: finishDrag, onPointerCancel: finishDrag, onClickCapture },
-    };
+function ComposerReferences({ selectedSkill, attachments, onRemoveSkill, onRemoveAttachment }: { selectedSkill?: SkillOption; attachments: CreativeAsset[]; onRemoveSkill: () => void; onRemoveAttachment: (id: string) => void }) {
+    return (
+        <div className="hide-scrollbar mb-2 flex gap-2 overflow-x-auto pt-0.5">
+            {selectedSkill ? (
+                <span className="flex h-11 max-w-56 shrink-0 items-center gap-2 rounded-lg border border-[#d6dee8] bg-[#f1f4f8] px-2.5 text-xs font-medium text-[#344152] dark:border-[#3b4653] dark:bg-[#252b33] dark:text-[#edf1f5]">
+                    <Sparkles className="size-3.5 shrink-0 text-[#95681d] dark:text-[#e4bb70]" />
+                    <span className="truncate">{selectedSkill.name}</span>
+                    <RemoveReferenceButton label={`移除 Skill ${selectedSkill.name}`} onClick={onRemoveSkill} />
+                </span>
+            ) : null}
+            {attachments.map((asset) => (
+                <ComposerReferenceMedia key={asset.id} asset={asset} onRemove={() => onRemoveAttachment(asset.id)} />
+            ))}
+        </div>
+    );
 }
 
-function skillCategoryOptions(skills: SkillOption[]) {
-    const categories: Array<{ id: SkillCategory; label: string }> = [
-        { id: "all", label: "全部" },
-        { id: "image", label: "图片" },
-        { id: "video", label: "视频" },
-        { id: "canvas", label: "画布" },
-        { id: "drama", label: "短剧" },
-        { id: "edit", label: "编辑" },
+function ComposerReferenceMedia({ asset, onRemove }: { asset: CreativeAsset; onRemove: () => void }) {
+    const [previewOpen, setPreviewOpen] = useState(false);
+    const url = asset.serverUrl || asset.remoteUrl || "";
+    const canPreview = Boolean(url) && (asset.type === "image" || asset.type === "video" || asset.type === "audio");
+    const Icon = asset.type === "image" ? ImageIcon : asset.type === "video" ? FileVideo : FileAudio;
+    const title = asset.title || "参考素材";
+
+    return (
+        <>
+            <span
+                className="group/reference-media relative flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-[#dfe3e8] bg-[#f2f4f6] text-[#687483] dark:border-[#343a42] dark:bg-[#252a31] dark:text-[#a9b2bd]"
+                title={title}
+            >
+                {asset.type === "image" && url ? <img src={imagePreviewUrl(url, 160)} alt={title} className="size-full object-cover" /> : <Icon className="size-4" />}
+                {canPreview ? (
+                    <button
+                        type="button"
+                        className="absolute bottom-0.5 left-0.5 grid size-5 place-items-center rounded-md bg-black/65 text-white opacity-90 transition hover:bg-black/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            setPreviewOpen(true);
+                        }}
+                        aria-label={`放大查看 ${title}`}
+                    >
+                        <Maximize2 className="size-3" />
+                    </button>
+                ) : null}
+                <button type="button" className="absolute right-0.5 top-0.5 grid size-4 place-items-center rounded-full bg-black/65 text-white transition hover:bg-black/80" onClick={onRemove} aria-label={`移除 ${title}`}>
+                    <X className="size-2.5" />
+                </button>
+            </span>
+            {canPreview ? (
+                <Modal
+                    title={title}
+                    open={previewOpen}
+                    footer={null}
+                    centered
+                    destroyOnHidden
+                    width={asset.type === "video" ? "min(1120px, calc(100vw - 24px))" : "min(960px, calc(100vw - 24px))"}
+                    onCancel={() => setPreviewOpen(false)}
+                    styles={{ body: { padding: 0, overflow: "hidden", background: asset.type === "video" ? "#000" : undefined } }}
+                >
+                    {asset.type === "image" ? <img src={imagePreviewUrl(url, 1920)} alt={title} className="mx-auto max-h-[78dvh] max-w-full object-contain" /> : null}
+                    {asset.type === "video" ? <video src={url} controls autoPlay playsInline preload="metadata" className="max-h-[78dvh] w-full bg-black object-contain" /> : null}
+                    {asset.type === "audio" ? <audio src={url} controls autoPlay className="w-full" /> : null}
+                </Modal>
+            ) : null}
+        </>
+    );
+}
+
+function RemoveReferenceButton({ label, onClick }: { label: string; onClick: () => void }) {
+    return (
+        <button
+            type="button"
+            className="grid size-5 shrink-0 place-items-center rounded-md text-[#7c8795] transition hover:bg-[#dfe5ec] hover:text-[#263141] dark:text-[#aab3bf] dark:hover:bg-[#343c46] dark:hover:text-white"
+            onClick={onClick}
+            aria-label={label}
+        >
+            <X className="size-3" />
+        </button>
+    );
+}
+
+function CreationModePicker({ mode, onChange, disabled }: { mode: CreationMode; onChange: (mode: CreationMode) => void; disabled?: boolean }) {
+    const [open, setOpen] = useState(false);
+    const items: Array<{ id: CreationMode; label: string; icon: ReactNode }> = [
+        { id: "agent", label: "Agent", icon: <QBrandIcon /> },
+        { id: "text", label: "文本创作", icon: <FileText className="size-4" /> },
+        { id: "image", label: "图片生成", icon: <ImageIcon className="size-4" /> },
+        { id: "video", label: "视频生成", icon: <FileVideo className="size-4" /> },
     ];
-    return categories.map((category) => ({ ...category, count: skills.filter((skill) => matchesSkillCategory(skill, category.id)).length })).filter((category) => category.id === "all" || category.count > 0);
+    const current = items.find((item) => item.id === mode) || items[0];
+    return (
+        <Popover
+            trigger="click"
+            placement="bottomLeft"
+            arrow={false}
+            autoAdjustOverflow={false}
+            open={open}
+            onOpenChange={setOpen}
+            content={
+                <div className="w-[228px] p-1" role="listbox" aria-label="选择创作类型">
+                    {items.map((item) => (
+                        <button
+                            key={item.id}
+                            type="button"
+                            role="option"
+                            aria-selected={item.id === mode}
+                            className={cn(
+                                "flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left transition",
+                                item.id === mode ? "bg-[#eef1f4] text-[#20242a] dark:bg-[#292f37] dark:text-white" : "text-[#4d5662] hover:bg-[#f4f6f8] dark:text-[#c2c9d1] dark:hover:bg-[#242930]",
+                            )}
+                            onClick={() => {
+                                onChange(item.id);
+                                setOpen(false);
+                            }}
+                        >
+                            <span className="grid size-7 shrink-0 place-items-center rounded-md bg-white text-[#465365] shadow-sm dark:bg-[#343b44] dark:text-[#e6eaf0]">{item.icon}</span>
+                            <span className="min-w-0 flex-1 truncate text-sm font-medium">{item.label}</span>
+                            {item.id === mode ? <Check className="size-4 shrink-0" aria-hidden="true" /> : null}
+                        </button>
+                    ))}
+                </div>
+            }
+        >
+            <Button
+                type="text"
+                className="!h-9 !max-w-[144px] !rounded-lg !px-2 !text-[#45505d] hover:!bg-[#eef1f4] dark:!text-[#c4cbd4] dark:hover:!bg-[#292f37]"
+                icon={current.icon}
+                disabled={disabled}
+                aria-label={`创作类型：${current.label}`}
+                aria-expanded={open}
+            >
+                <span className="truncate">{current.label}</span>
+                <ChevronDown className={cn("size-3.5 shrink-0 transition", open && "rotate-180")} />
+            </Button>
+        </Popover>
+    );
 }
 
-function matchesSkillCategory(skill: SkillOption, category: SkillCategory) {
-    if (category === "all") return true;
-    if (category === "edit") return skill.action === "edit";
-    return skill.workspaces?.includes(category) === true;
+function QBrandIcon() {
+    return <img src="/logo.svg" alt="" aria-hidden="true" className="size-6 shrink-0 object-contain dark:invert" />;
+}
+
+const creativeImageAspectOptions = [
+    { value: "auto", label: "智能", width: 0, height: 0 },
+    { value: "21:9", label: "21:9", width: 21, height: 9 },
+    { value: "16:9", label: "16:9", width: 16, height: 9 },
+    { value: "3:2", label: "3:2", width: 3, height: 2 },
+    { value: "4:3", label: "4:3", width: 4, height: 3 },
+    { value: "1:1", label: "1:1", width: 1, height: 1 },
+    { value: "3:4", label: "3:4", width: 3, height: 4 },
+    { value: "2:3", label: "2:3", width: 2, height: 3 },
+    { value: "9:16", label: "9:16", width: 9, height: 16 },
+] as const;
+
+const creativeVideoAspectOptions = creativeImageAspectOptions.filter((item) => item.value !== "auto" && item.value !== "3:2" && item.value !== "2:3");
+
+const creativeImageResolutionOptions = [
+    { value: "1.5k", label: "标清 1.5K", shortLabel: "1.5K", maxSide: 1536 },
+    { value: "2k", label: "高清 2K", shortLabel: "2K", maxSide: 2048 },
+    { value: "4k", label: "超清 4K", shortLabel: "4K", maxSide: 3840 },
+] as const;
+
+const creativeVideoResolutionOptions = [
+    { value: "480", label: "480P" },
+    { value: "720", label: "720P" },
+    { value: "1080", label: "1080P" },
+] as const;
+
+function DirectGenerationSettings({
+    mode,
+    config,
+    onConfigChange,
+    videoCount,
+    onVideoCountChange,
+    videoMethod,
+    onVideoMethodChange,
+}: {
+    mode: "image" | "video";
+    config: AiConfig;
+    onConfigChange: (key: "textModel" | "imageModel" | "videoModel" | "quality" | "size" | "count" | "vquality" | "videoSeconds" | "videoGenerateAudio" | "videoWatermark", value: string) => void;
+    videoCount: number;
+    onVideoCountChange: (value: number) => void;
+    videoMethod: DirectVideoMethod;
+    onVideoMethodChange: (value: DirectVideoMethod) => void;
+}) {
+    const theme = canvasThemes[useThemeStore((state) => state.theme)];
+    const count = Math.max(1, Math.min(4, Number(config.count) || 1));
+    const summary = mode === "image" ? `${creativeImageAspectLabel(config.size)} · ${creativeImageResolutionLabel(config.size)} · ${count}` : `${creativeVideoAspectLabel(config.size)} · ${creativeVideoResolutionLabel(config.vquality)} · ${videoCount}`;
+    return (
+        <div className="flex items-center gap-1">
+            <Popover
+                trigger="click"
+                placement="bottomRight"
+                arrow={false}
+                content={
+                    <div className="max-h-[min(74vh,680px)] w-[min(640px,calc(100vw-32px))] overflow-y-auto py-1">
+                        {mode === "image" ? (
+                            <CreativeImageSettingsPanel config={config} theme={theme} onConfigChange={onConfigChange} />
+                        ) : (
+                            <CreativeVideoSettingsPanel config={config} theme={theme} onConfigChange={onConfigChange} videoCount={videoCount} onVideoCountChange={onVideoCountChange} videoMethod={videoMethod} onVideoMethodChange={onVideoMethodChange} />
+                        )}
+                    </div>
+                }
+            >
+                <Button type="text" className="!h-9 !w-9 !min-w-9 !rounded-lg !px-2 !text-[#657180] sm:!w-auto sm:!max-w-[260px] dark:!text-[#9da7b3]" icon={<Settings2 className="size-4" />} aria-label={`生成设置：${summary}`} title={summary}>
+                    <span className="direct-settings-summary hidden truncate text-xs sm:block">{summary}</span>
+                    <ChevronDown className="direct-settings-chevron hidden size-3.5 shrink-0 sm:block" />
+                </Button>
+            </Popover>
+            {mode === "video" ? <VideoDurationPicker config={config} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} /> : null}
+        </div>
+    );
+}
+
+function CreativeImageSettingsPanel({ config, theme, onConfigChange }: { config: AiConfig; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; onConfigChange: (key: "size" | "count", value: string) => void }) {
+    const aspect = creativeImageAspectForSize(config.size);
+    const resolution = creativeImageResolutionForSize(config.size);
+    const count = Math.max(1, Math.min(4, Number(config.count) || 1));
+    return (
+        <CreativeSettingsSurface theme={theme}>
+            <CreativeSettingSection title="选择比例" color={theme.node.muted}>
+                <div className="grid grid-cols-5 gap-2 sm:grid-cols-9">
+                    {creativeImageAspectOptions.map((item) => (
+                        <CreativeAspectOption key={item.value} selected={aspect === item.value} theme={theme} item={item} onClick={() => onConfigChange("size", imageSizeForOptions(item.value, resolution))} />
+                    ))}
+                </div>
+            </CreativeSettingSection>
+            <CreativeSettingSection title="选择分辨率" color={theme.node.muted}>
+                <div className="grid grid-cols-3 gap-2">
+                    {creativeImageResolutionOptions.map((item) => (
+                        <CreativeChoiceButton key={item.value} selected={resolution === item.value} theme={theme} onClick={() => onConfigChange("size", imageSizeForOptions(aspect, item.value))}>
+                            {item.label}
+                        </CreativeChoiceButton>
+                    ))}
+                </div>
+            </CreativeSettingSection>
+            <CreativeSettingSection title="选择生成数量" color={theme.node.muted}>
+                <div className="grid grid-cols-4 gap-2">
+                    {[1, 2, 3, 4].map((value) => (
+                        <CreativeChoiceButton key={value} selected={count === value} theme={theme} onClick={() => onConfigChange("count", String(value))}>
+                            {value}
+                        </CreativeChoiceButton>
+                    ))}
+                </div>
+            </CreativeSettingSection>
+            <CreativeImageDimensionControls size={config.size} theme={theme} onChange={(value) => onConfigChange("size", value)} />
+        </CreativeSettingsSurface>
+    );
+}
+
+function CreativeVideoSettingsPanel({
+    config,
+    theme,
+    onConfigChange,
+    videoCount,
+    onVideoCountChange,
+    videoMethod,
+    onVideoMethodChange,
+}: {
+    config: AiConfig;
+    theme: (typeof canvasThemes)[keyof typeof canvasThemes];
+    onConfigChange: (key: "size" | "vquality" | "videoGenerateAudio" | "videoWatermark", value: string) => void;
+    videoCount: number;
+    onVideoCountChange: (value: number) => void;
+    videoMethod: DirectVideoMethod;
+    onVideoMethodChange: (value: DirectVideoMethod) => void;
+}) {
+    const aspect = creativeVideoAspectForSize(config.size);
+    const resolution = creativeVideoResolutionForValue(config.vquality);
+    const generateAudio = config.videoGenerateAudio !== "false";
+    const watermark = config.videoWatermark === "true";
+    return (
+        <CreativeSettingsSurface theme={theme}>
+            <CreativeSettingSection title="选择比例" color={theme.node.muted}>
+                <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+                    {creativeVideoAspectOptions.map((item) => (
+                        <CreativeAspectOption key={item.value} selected={aspect === item.value} theme={theme} item={item} onClick={() => onConfigChange("size", item.value)} />
+                    ))}
+                </div>
+            </CreativeSettingSection>
+            <CreativeSettingSection title="选择分辨率" color={theme.node.muted}>
+                <div className="grid grid-cols-3 gap-2">
+                    {creativeVideoResolutionOptions.map((item) => (
+                        <CreativeChoiceButton key={item.value} selected={resolution === item.value} theme={theme} onClick={() => onConfigChange("vquality", item.value)}>
+                            {item.label}
+                        </CreativeChoiceButton>
+                    ))}
+                </div>
+            </CreativeSettingSection>
+            <CreativeSettingSection title="选择生成数量" color={theme.node.muted}>
+                <div className="grid grid-cols-4 gap-2">
+                    {[1, 2, 3, 4].map((value) => (
+                        <CreativeChoiceButton key={value} selected={videoCount === value} theme={theme} onClick={() => onVideoCountChange(value)}>
+                            {value}
+                        </CreativeChoiceButton>
+                    ))}
+                </div>
+            </CreativeSettingSection>
+            <CreativeSettingSection title="生成方式" color={theme.node.muted}>
+                <div className="grid grid-cols-3 gap-2">
+                    {(["auto", "text", "reference"] as const).map((method) => (
+                        <CreativeChoiceButton key={method} selected={videoMethod === method} theme={theme} onClick={() => onVideoMethodChange(method)}>
+                            {videoMethodLabel(method)}
+                        </CreativeChoiceButton>
+                    ))}
+                </div>
+            </CreativeSettingSection>
+            <div className="grid gap-2 rounded-xl border p-2.5" style={{ borderColor: theme.node.stroke }}>
+                <CreativeSwitchRow label="生成声音" checked={generateAudio} theme={theme} onChange={(checked) => onConfigChange("videoGenerateAudio", String(checked))} />
+                <CreativeSwitchRow label="添加水印" checked={watermark} theme={theme} onChange={(checked) => onConfigChange("videoWatermark", String(checked))} />
+            </div>
+        </CreativeSettingsSurface>
+    );
+}
+
+function VideoDurationPicker({ config, theme, onChange }: { config: AiConfig; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; onChange: (value: string) => void }) {
+    const [open, setOpen] = useState(false);
+    const minSeconds = 5;
+    const seconds = normalizeCreativeVideoDuration(config.videoSeconds, minSeconds);
+    return (
+        <Popover
+            trigger="click"
+            placement="bottomRight"
+            arrow={false}
+            open={open}
+            onOpenChange={setOpen}
+            content={
+                <div className="w-[min(420px,calc(100vw-32px))] space-y-3 px-1 py-1">
+                    <p className="text-sm font-semibold" style={{ color: theme.node.text }}>
+                        选择视频生成时长
+                    </p>
+                    <input
+                        aria-label="视频生成时长"
+                        type="range"
+                        min={minSeconds}
+                        max={15}
+                        step={1}
+                        value={seconds}
+                        className="h-3 w-full cursor-pointer accent-[#7f8794] [&::-moz-range-thumb]:h-5 [&::-moz-range-thumb]:w-5 [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:w-5"
+                        onChange={(event) => onChange(event.target.value)}
+                    />
+                    <div className="grid grid-cols-3 text-[11px] font-medium" style={{ color: theme.node.muted }}>
+                        {[5, 10, 15].map((tick) => (
+                            <button key={tick} type="button" className={cn("transition hover:opacity-80", tick === 5 ? "justify-self-start" : tick === 15 ? "justify-self-end" : "justify-self-center")} onClick={() => onChange(String(tick))}>
+                                {tick}
+                            </button>
+                        ))}
+                    </div>
+                    <label className="ml-auto flex h-12 w-32 items-center overflow-hidden rounded-xl px-3 text-sm" style={{ background: theme.node.fill, color: theme.node.text }}>
+                        <input
+                            type="number"
+                            aria-label="时长秒数"
+                            min={minSeconds}
+                            max={15}
+                            value={seconds}
+                            onChange={(event) => onChange(normalizeCreativeVideoDuration(event.target.value, minSeconds).toString())}
+                            className="min-w-0 flex-1 bg-transparent text-lg font-semibold outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                        />
+                        <span className="text-sm opacity-55">s</span>
+                    </label>
+                </div>
+            }
+        >
+            <Button type="text" className="!h-9 !w-9 !min-w-9 !rounded-lg !px-2 !text-[#657180] sm:!w-auto dark:!text-[#9da7b3]" icon={<Clock3 className="size-4" />} aria-label={`视频生成时长：${seconds}秒`} title={`${seconds}秒`}>
+                <span className="hidden text-xs sm:block">{seconds}s</span>
+            </Button>
+        </Popover>
+    );
+}
+
+function CreativeSettingsSurface({ theme, children }: { theme: (typeof canvasThemes)[keyof typeof canvasThemes]; children: ReactNode }) {
+    return (
+        <div className="space-y-4 rounded-2xl px-2 py-1 text-sm" style={{ color: theme.node.text }} onMouseDown={(event) => event.stopPropagation()}>
+            {children}
+        </div>
+    );
+}
+
+function CreativeSettingSection({ title, color, children }: { title: string; color: string; children: ReactNode }) {
+    return (
+        <section className="space-y-2.5">
+            <p className="text-xs font-medium" style={{ color }}>
+                {title}
+            </p>
+            {children}
+        </section>
+    );
+}
+
+function CreativeChoiceButton({ selected, theme, onClick, children }: { selected: boolean; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; onClick: () => void; children: ReactNode }) {
+    return (
+        <button
+            type="button"
+            className="flex h-11 items-center justify-center rounded-xl border px-2 text-sm transition hover:opacity-80"
+            style={{ borderColor: selected ? theme.node.text : theme.node.stroke, background: selected ? theme.node.fill : "transparent", color: theme.node.text }}
+            aria-pressed={selected}
+            onClick={onClick}
+        >
+            {children}
+        </button>
+    );
+}
+
+function CreativeAspectOption({ selected, theme, item, onClick }: { selected: boolean; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; item: { value: string; label: string; width: number; height: number }; onClick: () => void }) {
+    return (
+        <button
+            type="button"
+            className="flex h-[70px] min-w-0 flex-col items-center justify-center gap-1 rounded-xl border px-1 text-xs transition hover:opacity-80"
+            style={{ borderColor: selected ? theme.node.text : "transparent", background: selected ? theme.node.fill : "transparent", color: theme.node.text }}
+            aria-pressed={selected}
+            onClick={onClick}
+        >
+            <CreativeAspectIcon width={item.width} height={item.height} theme={theme} />
+            <span className="truncate">{item.label}</span>
+        </button>
+    );
+}
+
+function CreativeAspectIcon({ width, height, theme }: { width: number; height: number; theme: (typeof canvasThemes)[keyof typeof canvasThemes] }) {
+    if (!width || !height) return <Circle className="size-4" style={{ color: theme.node.text }} />;
+    const ratio = width / height;
+    const boxWidth = ratio >= 1 ? 22 : Math.max(10, Math.round(22 * ratio));
+    const boxHeight = ratio >= 1 ? Math.max(10, Math.round(22 / ratio)) : 22;
+    return (
+        <span className="grid h-6 w-8 place-items-center">
+            <span className="rounded-[3px] border-2" style={{ width: boxWidth, height: boxHeight, borderColor: theme.node.text }} />
+        </span>
+    );
+}
+
+function CreativeImageDimensionControls({ size, theme, onChange }: { size: string; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; onChange: (value: string) => void }) {
+    const dimensions = creativeImageDimensionsForSize(size);
+    return (
+        <CreativeSettingSection title="尺寸" color={theme.node.muted}>
+            <div className="grid grid-cols-[1fr_auto_1fr_auto] items-center gap-2">
+                <CreativeDimensionField prefix="W" value={dimensions.width} theme={theme} onChange={(value) => onChange(`${value}x${dimensions.height}`)} />
+                <Link2 className="size-4 opacity-55" />
+                <CreativeDimensionField prefix="H" value={dimensions.height} theme={theme} onChange={(value) => onChange(`${dimensions.width}x${value}`)} />
+                <span className="text-xs opacity-55">PX</span>
+            </div>
+        </CreativeSettingSection>
+    );
+}
+
+function CreativeDimensionField({ prefix, value, theme, onChange }: { prefix: string; value: number; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; onChange: (value: number) => void }) {
+    const [draft, setDraft] = useState(String(value || ""));
+    useEffect(() => setDraft(String(value || "")), [value]);
+    const commit = () => {
+        const next = Math.max(1, Math.floor(Number(draft) || value || 1024));
+        setDraft(String(next));
+        onChange(next);
+    };
+    return (
+        <label className="flex h-11 min-w-0 items-center overflow-hidden rounded-xl px-2.5" style={{ background: theme.node.fill, color: theme.node.text }}>
+            <span className="mr-2 text-xs font-medium opacity-60">{prefix}</span>
+            <input
+                type="number"
+                min={1}
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                onBlur={commit}
+                onKeyDown={(event) => {
+                    if (event.key === "Enter") event.currentTarget.blur();
+                }}
+                className="min-w-0 flex-1 bg-transparent text-right text-sm font-semibold outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+            />
+        </label>
+    );
+}
+
+function CreativeSwitchRow({ label, checked, theme, onChange }: { label: string; checked: boolean; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; onChange: (checked: boolean) => void }) {
+    return (
+        <div className="flex h-8 items-center justify-between gap-3">
+            <span className="text-sm">{label}</span>
+            <Switch size="small" checked={checked} onChange={onChange} />
+        </div>
+    );
+}
+
+function creativeImageAspectForSize(size: string) {
+    if (size === "auto") return "auto";
+    const direct = creativeImageAspectOptions.find((item) => item.value === size);
+    if (direct) return direct.value;
+    const dimensions = parseImageDimensions(size);
+    if (!dimensions) return "auto";
+    return closestCreativeAspect(
+        dimensions.width / dimensions.height,
+        creativeImageAspectOptions.filter((item) => item.value !== "auto"),
+    );
+}
+
+function creativeImageResolutionForSize(size: string) {
+    const dimensions = parseImageDimensions(size);
+    if (!dimensions) return "2k";
+    const maxSide = Math.max(dimensions.width, dimensions.height);
+    if (maxSide >= 3000) return "4k";
+    if (maxSide >= 1900) return "2k";
+    return "1.5k";
+}
+
+function closestCreativeAspect(ratio: number, candidates: ReadonlyArray<{ value: string; width: number; height: number }>) {
+    return candidates.reduce((best, candidate) => {
+        const bestRatio = best.width / best.height;
+        const candidateRatio = candidate.width / candidate.height;
+        return Math.abs(Math.log(ratio / candidateRatio)) < Math.abs(Math.log(ratio / bestRatio)) ? candidate : best;
+    }).value;
+}
+
+function imageSizeForOptions(aspect: string, resolution: string) {
+    const option = creativeImageResolutionOptions.find((item) => item.value === resolution) || creativeImageResolutionOptions[1];
+    if (aspect === "auto") return "auto";
+    const ratio = creativeImageAspectOptions.find((item) => item.value === aspect) || creativeImageAspectOptions[2];
+    const longSide = option.maxSide;
+    const width = ratio.width >= ratio.height ? longSide : alignCreativeDimension((longSide * ratio.width) / ratio.height);
+    const height = ratio.width >= ratio.height ? alignCreativeDimension((longSide * ratio.height) / ratio.width) : longSide;
+    return `${width}x${height}`;
+}
+
+function alignCreativeDimension(value: number) {
+    return Math.max(16, Math.round(value / 16) * 16);
+}
+
+function creativeImageAspectLabel(size: string) {
+    return creativeImageAspectOptions.find((item) => item.value === creativeImageAspectForSize(size))?.label || "智能";
+}
+
+function creativeImageResolutionLabel(size: string) {
+    return creativeImageResolutionOptions.find((item) => item.value === creativeImageResolutionForSize(size))?.shortLabel || "2K";
+}
+
+function creativeImageDimensionsForSize(size: string) {
+    const dimensions = parseImageDimensions(size);
+    if (dimensions) return dimensions;
+    return parseImageDimensions(imageSizeForOptions(creativeImageAspectForSize(size), creativeImageResolutionForSize(size))) || { width: 2048, height: 2048 };
+}
+
+function creativeVideoAspectForSize(size: string) {
+    const ratio = normalizeSeedanceRatio(size);
+    return ratio === "adaptive" ? "16:9" : ratio;
+}
+
+function creativeVideoResolutionForValue(value: string) {
+    const normalized = String(value || "720").replace(/p$/i, "");
+    return creativeVideoResolutionOptions.some((item) => item.value === normalized) ? normalized : "720";
+}
+
+function creativeVideoAspectLabel(size: string) {
+    return creativeVideoAspectOptions.find((item) => item.value === creativeVideoAspectForSize(size))?.label || "16:9";
+}
+
+function creativeVideoResolutionLabel(value: string) {
+    return creativeVideoResolutionOptions.find((item) => item.value === creativeVideoResolutionForValue(value))?.label || "720P";
+}
+
+function normalizeCreativeVideoDuration(value: string, min = 5) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return min;
+    return Math.max(min, Math.min(15, Math.floor(parsed)));
+}
+
+function directModel(config: AiConfig, mode: DirectCreationMode) {
+    return mode === "text" ? config.textModel : mode === "image" ? config.imageModel : config.videoModel;
+}
+
+function directModelKey(mode: DirectCreationMode): "textModel" | "imageModel" | "videoModel" {
+    return mode === "text" ? "textModel" : mode === "image" ? "imageModel" : "videoModel";
+}
+
+function videoMethodLabel(value: DirectVideoMethod) {
+    return value === "text" ? "文生视频" : value === "reference" ? "参考生成" : "自动判断";
+}
+
+function skillAvailableInMode(skill: SkillOption, mode: CreationMode) {
+    if (mode === "agent") return true;
+    if (mode === "text") return skill.workspaces?.includes("image") || skill.workspaces?.includes("video") || skill.workspaces?.includes("drama") || false;
+    return (skill.workspaces || ["image"]).includes(mode);
 }
 
 function skillOptionVisual(skill: SkillOption) {
@@ -490,29 +996,36 @@ function skillOptionVisual(skill: SkillOption) {
     return { icon: Boxes, surfaceClass: "bg-slate-100 dark:bg-slate-400/10", iconClass: "text-slate-600 dark:text-slate-300" };
 }
 
-function ModelPlatformIcon({ model }: { model: ModelOption }) {
-    const identity = `${model.id} ${model.name}`.toLowerCase();
-    if (/gemini|veo|imagen/.test(identity))
-        return (
-            <BrandIcon path="M11.04 19.32Q12 21.51 12 24q0-2.49.93-4.68.96-2.19 2.58-3.81t3.81-2.55Q21.51 12 24 12q-2.49 0-4.68-.93a12.3 12.3 0 0 1-3.81-2.58 12.3 12.3 0 0 1-2.58-3.81Q12 2.49 12 0q0 2.49-.96 4.68-.93 2.19-2.55 3.81a12.3 12.3 0 0 1-3.81 2.58Q2.49 12 0 12q2.49 0 4.68.96 2.19.93 3.81 2.55t2.55 3.81" />
-        );
-    if (/seedance|doubao|bytedance/.test(identity))
-        return <BrandIcon path="M19.8772 1.4685L24 2.5326v18.9426l-4.1228 1.0563V1.4685zm-13.3481 9.428l4.115 1.0641v8.9786l-4.115 1.0642v-11.107zM0 2.572l4.115 1.0642v16.7354L0 21.428V2.572zm17.4553 5.6205v11.107l-4.1228-1.0642V9.2568l4.1228-1.0642z" />;
-    if (/wan|qwen|tongyi/.test(identity))
-        return (
-            <BrandIcon path="M3.996 4.517h5.291L8.01 6.324 4.153 7.506a1.668 1.668 0 0 0-1.165 1.601v5.786a1.668 1.668 0 0 0 1.165 1.6l3.857 1.183 1.277 1.807H3.996A3.996 3.996 0 0 1 0 15.487V8.513a3.996 3.996 0 0 1 3.996-3.996m16.008 0h-5.291l1.277 1.807 3.857 1.182c.715.227 1.17.889 1.165 1.601v5.786a1.668 1.668 0 0 1-1.165 1.6l-3.857 1.183-1.277 1.807h5.291A3.996 3.996 0 0 0 24 15.487V8.513a3.996 3.996 0 0 0-3.996-3.996m-4.007 8.345H8.002v-1.804h7.995Z" />
-        );
-    if (/kling|kuaishou/.test(identity))
-        return (
-            <BrandIcon path="M18.315 12.264c2.33 0 4.218 1.88 4.218 4.2V19.8c0 2.32-1.888 4.2-4.218 4.2h-6.202a4.218 4.218 0 0 1-4.023-2.938l-3.676 1.833a2.04 2.04 0 0 1-2.731-.903 2.015 2.015 0 0 1-.216-.907v-5.94a2.03 2.03 0 0 1 2.035-2.024 2.044 2.044 0 0 1 .919.218l3.673 1.85a4.218 4.218 0 0 1 4.02-2.925zm-.062 2.162h-6.078c-1.153 0-2.09.921-2.108 2.065v3.247c0 1.148.925 2.081 2.073 2.1h6.113c1.153 0 2.09-.922 2.109-2.065v-3.247a2.104 2.104 0 0 0-2.074-2.1zM4.18 15.72a.554.554 0 0 0-.555.542v3.734a.556.556 0 0 0 .798.496l.01-.004 3.463-1.756V17.51l-3.467-1.73a.557.557 0 0 0-.249-.06zM9.28 0a5.667 5.667 0 0 1 4.98 2.965 4.921 4.921 0 0 1 3.36-1.317c2.714 0 4.913 2.177 4.913 4.863 0 2.686-2.2 4.863-4.912 4.863a4.921 4.921 0 0 1-3.996-2.034 5.651 5.651 0 0 1-4.345 2.034c-3.131 0-5.67-2.546-5.67-5.687C3.61 2.546 6.149 0 9.28 0Zm8.34 3.926c-1.441 0-2.61 1.157-2.61 2.585s1.169 2.585 2.61 2.585c1.443 0 2.612-1.157 2.612-2.585s-1.169-2.585-2.611-2.585zM9.28 2.287a3.395 3.395 0 0 0-3.39 3.4c0 1.877 1.518 3.4 3.39 3.4a3.395 3.395 0 0 0 3.39-3.4c0-1.878-1.518-3.4-3.39-3.4z" />
-        );
-    return <Orbit className="size-3.5" />;
+function mentionDraftAt(value: string, caret: number): MentionDraft | null {
+    const beforeCaret = value.slice(0, caret);
+    const match = beforeCaret.match(/@([^\s@]*)$/);
+    if (!match) return null;
+
+    const start = caret - match[0].length;
+    if (start > 0 && !/\s/.test(value[start - 1] || "")) return null;
+
+    return {
+        start,
+        end: caret,
+        query: match[1] || "",
+    };
 }
 
-function BrandIcon({ path }: { path: string }) {
-    return (
-        <svg viewBox="0 0 24 24" className="size-3.5 fill-current" aria-hidden="true">
-            <path d={path} />
-        </svg>
-    );
+function mentionLabel(asset: CreateOverviewAsset) {
+    return (asset.title || `${asset.kind}内容`).trim().replace(/\s+/g, "_").slice(0, 48);
+}
+
+function recentAssetAllowedInMode(asset: CreateOverviewAsset, mode: CreationMode) {
+    if (mode === "agent" || mode === "video") return asset.kind === "image" || asset.kind === "video" || asset.kind === "audio";
+    return asset.kind === "image";
+}
+
+function recentAssetKindLabel(kind: CreateOverviewAsset["kind"]) {
+    return kind === "image" ? "图片" : kind === "video" ? "视频" : "音频";
+}
+
+function formatRecentAssetDate(value: string) {
+    const timestamp = Date.parse(value);
+    if (!Number.isFinite(timestamp)) return "最近";
+    return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(timestamp);
 }

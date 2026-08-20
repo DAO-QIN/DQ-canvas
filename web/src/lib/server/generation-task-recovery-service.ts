@@ -305,6 +305,10 @@ async function processBackgroundRemovalLease(lease: GenerationTaskLease, workerI
 
 async function processAgentLease(lease: GenerationTaskLease, workerId: string, origin: string, cookie: string): Promise<RecoveryResult> {
     const run = await getAgentRun(lease.id);
+    if (run?.status === "awaiting_confirmation") {
+        await releaseGenerationTaskLease("agent", run.id, workerId, { executionPhase: "awaiting_confirmation", nextPollAt: undefined, lastUpstreamStatus: "awaiting_confirmation" });
+        return "pending";
+    }
     if (run?.status === "completed" && !run.reviewed && (lease.executionPhase === "review_pending" || lease.executionPhase === "reviewing")) {
         const result = await processAgentRunReview(run, origin, cookie || workerContext(run.userId));
         if (result.status === "retry") {
@@ -340,6 +344,10 @@ async function processAgentLease(lease: GenerationTaskLease, workerId: string, o
         }
         await executeAgentRun(run, origin, cookie || workerContext(run.userId));
         const latest = await getAgentRun(run.id);
+        if (latest?.status === "awaiting_confirmation") {
+            await releaseGenerationTaskLease("agent", run.id, workerId, { executionPhase: "awaiting_confirmation", nextPollAt: undefined, lastUpstreamStatus: "awaiting_confirmation" });
+            return "pending";
+        }
         if (!latest || latest.status === "completed" || latest.status === "failed" || latest.status === "cancelled" || latest.status === "paused") {
             await releaseGenerationTaskLease("agent", run.id, workerId, { executionPhase: "completed", nextPollAt: undefined, lastUpstreamStatus: latest?.status || "missing" });
             return latest?.status === "completed" ? "completed" : "failed";
@@ -353,6 +361,10 @@ async function processAgentLease(lease: GenerationTaskLease, workerId: string, o
         return "pending";
     } catch (error) {
         const latest = await getAgentRun(run.id);
+        if (latest?.status === "awaiting_confirmation") {
+            await releaseGenerationTaskLease("agent", run.id, workerId, { executionPhase: "awaiting_confirmation", nextPollAt: undefined, lastUpstreamStatus: "awaiting_confirmation" });
+            return "pending";
+        }
         if (latest?.status === "failed") {
             await releaseGenerationTaskLease("agent", run.id, workerId, { executionPhase: "completed", nextPollAt: undefined, lastUpstreamStatus: "failed" });
             return "failed";

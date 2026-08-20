@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { cancelCanvasGenerationTask, listCanvasGenerationTasks } from "./generation-tasks";
+import { cancelCanvasGenerationTask, listCanvasGenerationTasks, listCreativeWorkspaceGenerationTasks } from "./generation-tasks";
 
 describe("canvas generation task API", () => {
     afterEach(() => {
@@ -15,6 +15,14 @@ describe("canvas generation task API", () => {
 
         await expect(listCanvasGenerationTasks("canvas one", { activeOnly: true, limit: 5 })).resolves.toEqual([expect.objectContaining({ id: "task-1" })]);
         expect(fetchMock).toHaveBeenCalledWith("/api/generation-tasks?surface=canvas&projectId=canvas+one&activeOnly=true&limit=5", expect.objectContaining({ cache: "no-store" }));
+    });
+
+    it("keeps Design task queries isolated by surface and project", async () => {
+        const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: 0, data: { tasks: [] } }), { status: 200, headers: { "Content-Type": "application/json" } }));
+        vi.stubGlobal("fetch", fetchMock);
+
+        await expect(listCreativeWorkspaceGenerationTasks("design", "design one", { activeOnly: false, limit: 50 })).resolves.toEqual([]);
+        expect(fetchMock).toHaveBeenCalledWith("/api/generation-tasks?surface=design&projectId=design+one&activeOnly=false&limit=50", expect.objectContaining({ cache: "no-store" }));
     });
 
     it("surfaces server errors", async () => {

@@ -53,6 +53,17 @@ describe("POST /api/agent/runs", () => {
         expect(mocks.createAgentRun).not.toHaveBeenCalled();
     });
 
+    it("creates and schedules Design runs after the operation adapter gate is satisfied", async () => {
+        const run = { id: "design-run", userId: "user", clientRequestId: "request-one", surface: "design", projectId: "design-one" };
+        mocks.createAgentRun.mockResolvedValue({ run, conversation: { id: "design-conversation" }, created: true });
+        const response = await POST(request({ ...validInput(), surface: "design", projectId: "design-one" }));
+
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ data: { run: { id: "design-run", surface: "design", projectId: "design-one" }, created: true } });
+        expect(mocks.createAgentRun).toHaveBeenCalledWith("user", expect.objectContaining({ surface: "design", projectId: "design-one" }));
+        expect(mocks.scheduleGenerationTask).toHaveBeenCalledWith("agent", "design-run", expect.any(Object));
+    });
+
     it("returns an existing idempotent run before rate and concurrency checks", async () => {
         mocks.getAgentRunByClientRequestId.mockResolvedValue({ id: "existing-run", userId: "user", clientRequestId: "request-one" });
         const response = await POST(request({ ...validInput(), agentModelId: "removed-planner" }));

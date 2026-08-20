@@ -10,6 +10,7 @@ export type QueryExecutor = {
 };
 
 const POSTGRES_TABLE_PREFIX = "dq_";
+const POSTGRES_SCHEMA_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext(current_database()), hashtext('dq:schema:v1'))";
 const POSTGRES_TABLES = [
     "schema_migrations",
     "app_settings",
@@ -65,6 +66,11 @@ const POSTGRES_TABLES = [
     "local_media_assets",
     "object_storage_settings",
     "canvas_projects",
+    "canvas_project_save_receipts",
+    "design_projects",
+    "design_project_versions",
+    "design_operation_receipts",
+    "workspace_handoffs",
     "library_assets",
     "drama_projects",
     "drama_project_versions",
@@ -199,6 +205,12 @@ const POSTGRES_SCHEMA_OBJECTS = [
     "local_media_assets_storage_provider_check",
     "local_media_assets_external_object_idx",
     "canvas_projects_user_updated_idx",
+    "canvas_projects_user_id_id_idx",
+    "canvas_project_save_receipts_user_project_created_idx",
+    "design_projects_user_status_updated_idx",
+    "design_project_versions_user_project_version_idx",
+    "design_operation_receipts_user_project_created_idx",
+    "workspace_handoffs_user_updated_idx",
     "library_assets_user_updated_idx",
     "drama_projects_user_updated_idx",
     "drama_project_versions_user_created_idx",
@@ -419,7 +431,10 @@ export async function ensurePostgresSchema() {
 
 export async function initializePostgresSchema() {
     if (!globalForPostgres.__dqPostgresSchemaReady) {
-        globalForPostgres.__dqPostgresSchemaReady = postgresQuery(POSTGRESQL_SCHEMA_SQL)
+        globalForPostgres.__dqPostgresSchemaReady = withPostgresTransaction(async (client) => {
+            await client.query(POSTGRES_SCHEMA_LOCK_SQL);
+            await client.query(POSTGRESQL_SCHEMA_SQL);
+        })
             .then(() => undefined)
             .catch((error) => {
                 globalForPostgres.__dqPostgresSchemaReady = undefined;

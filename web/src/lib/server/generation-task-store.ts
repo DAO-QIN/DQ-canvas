@@ -1,3 +1,5 @@
+import type { CreativeSurface } from "@/lib/creative-runtime-contract";
+import { parseSurfaceBinding, type SurfaceBinding } from "@/lib/creative-workspace/surface-binding";
 import { getDatabaseProvider, ensurePostgresSchema, postgresQuery, withPostgresTransaction } from "@/lib/server/database";
 import { readJsonDataFile, writeJsonDataFile } from "@/lib/server/data-adapter";
 import { resolveServerDataPath } from "@/lib/server/data-dir";
@@ -9,7 +11,7 @@ type GenerationTaskStatus = "pending" | "running" | "success" | "error" | "pause
 export type GenerationTaskContext = {
     conversationId?: string;
     runId?: string;
-    surface?: "chat" | "canvas" | "drama";
+    surface?: CreativeSurface;
     projectId?: string;
     episodeId?: string;
     shotId?: string;
@@ -20,7 +22,12 @@ export type GenerationTaskContext = {
     generationLogId?: string;
     generationSlotId?: string;
     sourceNodeId?: string;
+    /** Stable source identity shared by Canvas and Design processing tasks. */
+    sourceIdentity?: string;
+    sourceElementId?: string;
+    sourceAssetVersionId?: string;
     targetNodeId?: string;
+    binding?: SurfaceBinding;
 };
 
 export type StoredGenerationTaskRecord = {
@@ -203,6 +210,11 @@ export async function getActiveStoredGenerationTaskBySourceNode<T>(type: Generat
     return (task?.payload as T | undefined) || null;
 }
 
+/** Finds an active image-processing task by a domain-neutral source identity. */
+export async function getActiveStoredGenerationTaskBySourceIdentity<T>(type: GenerationTaskType, userId: string, sourceIdentity: string, projectId?: string): Promise<T | null> {
+    return findStoredGenerationTaskBySourceIdentity(type, userId, sourceIdentity, projectId, true);
+}
+
 /** Returns the newest processing task for a canvas source node, including terminal results. */
 export async function getLatestStoredGenerationTaskBySourceNode<T>(type: GenerationTaskType, userId: string, sourceNodeId: string, projectId?: string): Promise<T | null> {
     const normalizedUserId = cleanContextText(userId);
@@ -226,6 +238,47 @@ export async function getLatestStoredGenerationTaskBySourceNode<T>(type: Generat
     }
     const task = (await readFileTasks())
         .filter((item) => item.type === type && item.userId === normalizedUserId && item.expiresAt > Date.now() && String(item.payload.sourceNodeId || "") === normalizedSourceNodeId && (!normalizedProjectId || item.projectId === normalizedProjectId))
+        .sort((a, b) => b.updatedAt - a.updatedAt || b.id.localeCompare(a.id))[0];
+    return (task?.payload as T | undefined) || null;
+}
+
+/** Returns the newest processing task for a domain-neutral source identity. */
+export async function getLatestStoredGenerationTaskBySourceIdentity<T>(type: GenerationTaskType, userId: string, sourceIdentity: string, projectId?: string): Promise<T | null> {
+    return findStoredGenerationTaskBySourceIdentity(type, userId, sourceIdentity, projectId, false);
+}
+
+async function findStoredGenerationTaskBySourceIdentity<T>(type: GenerationTaskType, userId: string, sourceIdentity: string, projectId: string | undefined, activeOnly: boolean): Promise<T | null> {
+    const normalizedUserId = cleanContextText(userId);
+    const normalizedSourceIdentity = cleanContextText(sourceIdentity);
+    const normalizedProjectId = cleanContextText(projectId);
+    if (!normalizedUserId || !normalizedSourceIdentity) return null;
+    const statusClause = activeOnly ? "AND status IN ('pending', 'running')" : "";
+    if (getDatabaseProvider() === "postgres") {
+        await ensurePostgresSchema();
+        const result = await postgresQuery<{ payload: T }>(
+            `SELECT payload
+             FROM generation_tasks
+             WHERE user_id = $1 AND task_type = $2
+               ${statusClause}
+               AND expires_at > now()
+               AND payload->>'sourceIdentity' = $3
+               AND ($4::text IS NULL OR project_id = $4)
+             ORDER BY updated_at DESC, id DESC
+             LIMIT 1`,
+            [normalizedUserId, type, normalizedSourceIdentity, normalizedProjectId || null],
+        );
+        return result.rows[0]?.payload || null;
+    }
+    const task = (await readFileTasks())
+        .filter(
+            (item) =>
+                item.type === type &&
+                item.userId === normalizedUserId &&
+                (!activeOnly || ["pending", "running"].includes(item.status)) &&
+                item.expiresAt > Date.now() &&
+                String(item.payload.sourceIdentity || "") === normalizedSourceIdentity &&
+                (!normalizedProjectId || item.projectId === normalizedProjectId),
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || b.id.localeCompare(a.id))[0];
     return (task?.payload as T | undefined) || null;
 }
@@ -746,6 +799,11 @@ async function insertTask<T extends { id: string; userId: string; status: string
         if (inserted.rows[0]?.payload) return inserted.rows[0].payload;
         const existing = context.clientRequestId ? await getStoredGenerationTaskByRequest<T>(type, task.userId, context.clientRequestId, context.attemptNo) : await getStoredGenerationTask<T>(type, task.id);
         if (existing) return existing;
+        const sourceIdentity = typeof (task as unknown as Record<string, unknown>).sourceIdentity === "string" ? String((task as unknown as Record<string, unknown>).sourceIdentity) : "";
+        if (sourceIdentity && type === "image_process") {
+            const active = await getActiveStoredGenerationTaskBySourceIdentity<T>(type, task.userId, sourceIdentity, context.projectId);
+            if (active) return active;
+        }
         const sourceNodeId = typeof (task as unknown as Record<string, unknown>).sourceNodeId === "string" ? String((task as unknown as Record<string, unknown>).sourceNodeId) : "";
         if (sourceNodeId && type === "image_process") {
             const active = await getActiveStoredGenerationTaskBySourceNode<T>(type, task.userId, sourceNodeId, context.projectId);
@@ -755,10 +813,19 @@ async function insertTask<T extends { id: string; userId: string; status: string
     }
     return withGenerationTaskFileMutation(async (tasks) => {
         const sourceNodeId = typeof (task as unknown as Record<string, unknown>).sourceNodeId === "string" ? String((task as unknown as Record<string, unknown>).sourceNodeId) : "";
+        const sourceIdentity = typeof (task as unknown as Record<string, unknown>).sourceIdentity === "string" ? String((task as unknown as Record<string, unknown>).sourceIdentity) : "";
         const duplicate = tasks.find(
             (item) =>
                 item.id === task.id ||
                 (context.clientRequestId && sameTaskRequest(item, type, task.userId, context.clientRequestId, normalizedAttemptNo(context.attemptNo))) ||
+                (type === "image_process" &&
+                    sourceIdentity &&
+                    item.type === type &&
+                    item.userId === task.userId &&
+                    ["pending", "running"].includes(item.status) &&
+                    item.expiresAt > Date.now() &&
+                    String(item.payload.sourceIdentity || "") === sourceIdentity &&
+                    (!context.projectId || item.projectId === context.projectId)) ||
                 (type === "image_process" &&
                     sourceNodeId &&
                     item.type === type &&
@@ -851,13 +918,18 @@ export function withGenerationTaskFileMutation<T>(mutator: (tasks: StoredGenerat
     return run;
 }
 
-function normalizeGenerationTaskContext(context: GenerationTaskContext): GenerationTaskContext {
+export function normalizeGenerationTaskContext(context: GenerationTaskContext): GenerationTaskContext {
     const attempt = Number(context.attemptNo);
+    const binding = context.binding === undefined ? undefined : parseSurfaceBinding(context.binding);
+    const surface = isTaskSurface(context.surface) ? context.surface : binding?.surface;
+    const projectId = cleanContextText(context.projectId) || binding?.projectId;
+    if (binding && surface !== binding.surface) throw new Error("任务 binding 与 surface 不一致");
+    if (binding && projectId !== binding.projectId) throw new Error("任务 binding 与 projectId 不一致");
     return {
         conversationId: cleanContextText(context.conversationId),
         runId: cleanContextText(context.runId),
-        surface: context.surface === "chat" || context.surface === "canvas" || context.surface === "drama" ? context.surface : undefined,
-        projectId: cleanContextText(context.projectId),
+        surface,
+        projectId,
         episodeId: cleanContextText(context.episodeId),
         shotId: cleanContextText(context.shotId),
         estimatedPoints: positiveContextNumber(context.estimatedPoints),
@@ -867,7 +939,11 @@ function normalizeGenerationTaskContext(context: GenerationTaskContext): Generat
         generationLogId: cleanContextText(context.generationLogId),
         generationSlotId: cleanContextText(context.generationSlotId),
         sourceNodeId: cleanContextText(context.sourceNodeId),
+        sourceIdentity: cleanContextText(context.sourceIdentity),
+        sourceElementId: cleanContextText(context.sourceElementId),
+        sourceAssetVersionId: cleanContextText(context.sourceAssetVersionId),
         targetNodeId: cleanContextText(context.targetNodeId),
+        binding,
     };
 }
 
@@ -886,7 +962,11 @@ function preserveTaskContext(previous: StoredGenerationTaskRecord | undefined, n
         generationLogId: next.generationLogId || previous?.generationLogId,
         generationSlotId: next.generationSlotId || previous?.generationSlotId,
         sourceNodeId: next.sourceNodeId || previous?.sourceNodeId,
+        sourceIdentity: next.sourceIdentity || previous?.sourceIdentity,
+        sourceElementId: next.sourceElementId || previous?.sourceElementId,
+        sourceAssetVersionId: next.sourceAssetVersionId || previous?.sourceAssetVersionId,
         targetNodeId: next.targetNodeId || previous?.targetNodeId,
+        binding: next.binding || previous?.binding,
     };
 }
 
@@ -933,7 +1013,7 @@ function positiveContextNumber(value: unknown) {
 
 function normalizeGenerationTaskStatus(status: string): GenerationTaskStatus {
     const value = status.trim().toLowerCase();
-    if (["planning", "queued", "created", "pending"].includes(value)) return "pending";
+    if (["planning", "queued", "created", "pending", "awaiting_confirmation"].includes(value)) return "pending";
     if (["processing", "in_progress", "running"].includes(value)) return "running";
     if (["completed", "succeeded", "success"].includes(value)) return "success";
     if (["failed", "failure", "error", "expired"].includes(value)) return "error";
@@ -963,6 +1043,14 @@ function mapStoredTaskRecord(row: Record<string, unknown>): StoredGenerationTask
         parentTaskId: cleanContextText(String(row.parent_task_id || "")),
         attemptNo: row.attempt_no === null || row.attempt_no === undefined ? undefined : Math.max(0, Math.floor(Number(row.attempt_no) || 0)),
         clientRequestId: cleanContextText(String(row.client_request_id || "")),
+        generationLogId: cleanContextText(String(payload.generationLogId || "")),
+        generationSlotId: cleanContextText(String(payload.generationSlotId || "")),
+        sourceNodeId: cleanContextText(String(payload.sourceNodeId || "")),
+        sourceIdentity: cleanContextText(String(payload.sourceIdentity || "")),
+        sourceElementId: cleanContextText(String(payload.sourceElementId || "")),
+        sourceAssetVersionId: cleanContextText(String(payload.sourceAssetVersionId || "")),
+        targetNodeId: cleanContextText(String(payload.targetNodeId || "")),
+        binding: safeSurfaceBinding(payload.binding),
         executionPhase: isExecutionPhase(row.execution_phase) ? row.execution_phase : undefined,
         upstreamTaskId: cleanUpstreamTaskId(String(row.upstream_task_id || "")),
         channelId: cleanContextText(String(row.channel_id || "")),
@@ -992,6 +1080,15 @@ function mapGenerationTaskCostAggregate(row: Record<string, unknown>): Generatio
     ];
 }
 
+function safeSurfaceBinding(value: unknown) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    try {
+        return parseSurfaceBinding(value);
+    } catch {
+        return undefined;
+    }
+}
+
 function isTaskType(value: unknown): value is GenerationTaskType {
     return value === "text" || value === "image" || value === "video" || value === "audio" || value === "agent" || value === "render" || value === "image_process";
 }
@@ -1005,7 +1102,7 @@ function normalizedTaskStatuses(values: string[] | undefined): GenerationTaskSta
 }
 
 function isTaskSurface(value: unknown): value is NonNullable<GenerationTaskContext["surface"]> {
-    return value === "chat" || value === "canvas" || value === "drama";
+    return value === "chat" || value === "canvas" || value === "design" || value === "drama";
 }
 
 function isExecutionPhase(value: unknown): value is NonNullable<StoredGenerationTaskRecord["executionPhase"]> {
@@ -1016,6 +1113,7 @@ function isExecutionPhase(value: unknown): value is NonNullable<StoredGeneration
         value === "polling" ||
         value === "result_ready" ||
         value === "persisting" ||
+        value === "awaiting_confirmation" ||
         value === "cancel_requested" ||
         value === "cancel_polling" ||
         value === "needs_review" ||

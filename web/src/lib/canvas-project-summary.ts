@@ -4,6 +4,7 @@ export function summarizeCanvasProjectRecord(project: CanvasProject): CanvasProj
     const preview = canvasProjectMediaPreviews(project, 1)[0];
     return {
         id: project.id,
+        revision: typeof project.revision === "number" && Number.isSafeInteger(project.revision) && project.revision >= 0 ? project.revision : 0,
         sourceHandoffId: project.sourceHandoffId,
         creativeConversationId: project.creativeConversationId,
         title: project.title,

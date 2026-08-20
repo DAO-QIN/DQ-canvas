@@ -25,6 +25,7 @@ export type CreateImageTaskBody = {
     kind?: "generation" | "edit";
     config?: ImageTaskConfig;
     prompt?: string;
+    skillIds?: string[];
     references?: ImageTaskReference[];
     mask?: ImageTaskReference;
     source?: string;

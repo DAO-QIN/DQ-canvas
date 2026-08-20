@@ -6,7 +6,7 @@ export const CHARACTER_DESIGN_SKILL = {
     sourceVersion: "1.0.0",
     license: "MIT",
     enabled: true,
-    workspaces: ["image", "canvas", "drama"],
+    workspaces: ["image", "canvas", "design", "drama"],
     action: "generate",
     requiresReference: false,
     defaultConfig: { quality: "high", count: 4 },

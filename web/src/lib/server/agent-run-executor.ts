@@ -13,6 +13,9 @@ import { normalizeCanvasPlanForSelection } from "./agent-run-task-input";
 import { GenerationSubmissionUncertainError } from "@/lib/server/generation-submission-error";
 import { rankTextPlanningCandidates } from "@/lib/server/text-planning-runtime";
 import { filterAgentPlannerModels } from "@/lib/server/agent-run-planning-profile";
+import { buildAgentWorkspaceActionRequestForRun, getAgentWorkspaceSnapshotForRun } from "./agent-workspace-actions";
+import { workspaceActionRequiresConfirmation } from "@/lib/creative-workspace";
+import { scheduleGenerationTask } from "./generation-task-scheduler";
 
 const globalAgentExecutors = globalThis as typeof globalThis & { __dqAgentRunControllers?: Map<string, AbortController> };
 const controllers = (globalAgentExecutors.__dqAgentRunControllers ??= new Map<string, AbortController>());
@@ -57,11 +60,13 @@ export async function executeAgentRun(run: AgentRun, origin: string, cookie: str
         const allModels = agentModelOptions(settings);
         const requestedModels = requestedModelIds.map((id) => allModels.find((model) => model.id === id));
         if (requestedModels.some((model) => !model || model.capability === "text")) throw new Error("部分所选模型当前不可用，请重新选择");
-        const availableModels = constrainPlannerModels(filterAgentPlannerModels(allModels, claimed), allModels, requestedModelIds);
-        const skillOptions = plannerAgentSkills(settings, claimed);
         if (!(await canContinue(run.id, executionId))) return;
         const referencedAssets = usesMemoryCandidates ? memoryAssets : explicitAssets;
         const referenceSource = claimed.referencedAssetIds.length ? "current-turn-explicit" : usesMemoryCandidates && referencedAssets.length ? "conversation-memory-candidates" : "none";
+        const trustedWorkspaceSnapshot = claimed.surface === "canvas" || claimed.surface === "design" ? await getAgentWorkspaceSnapshotForRun(claimed) : undefined;
+        const planningRun = trustedWorkspaceSnapshot ? { ...claimed, snapshot: trustedWorkspaceSnapshot } : claimed;
+        const availableModels = constrainPlannerModels(filterAgentPlannerModels(allModels, planningRun), allModels, requestedModelIds);
+        const skillOptions = plannerAgentSkills(settings, planningRun);
         const requestedAgentModelId = typeof claimed.requestedAgentModelId === "string" ? claimed.requestedAgentModelId.trim() : "";
         const model = requestedAgentModelId || settings.defaultModels.textModel;
         const candidates = resolveLogicalModelCandidates(settings, "text", model);
@@ -75,7 +80,7 @@ export async function executeAgentRun(run: AgentRun, origin: string, cookie: str
             },
             {
                 role: "user",
-                content: JSON.stringify(agentPlannerInput(claimed, conversationContext!, referencedAssets, referenceSource, skillOptions, availableModels, settings)),
+                content: JSON.stringify(agentPlannerInput(planningRun, conversationContext!, referencedAssets, referenceSource, skillOptions, availableModels, settings)),
             },
         ];
         let plan: Awaited<ReturnType<typeof parseAgentPlanCall>> | undefined;
@@ -97,6 +102,7 @@ export async function executeAgentRun(run: AgentRun, origin: string, cookie: str
                 );
                 plan = await parseAgentPlanCall(planCall, () => refundFunctionCall(claimed.userId, model, planCall), undefined, {
                     allowProjectHandoff: claimed.surface === "chat" && isExplicitProjectHandoffRequest(claimed.prompt),
+                    allowWorkspaceActions: claimed.surface === "canvas" || claimed.surface === "design",
                 });
                 if (plan) acceptedPlan = { userId: claimed.userId, model, call: planCall };
                 break;
@@ -107,7 +113,7 @@ export async function executeAgentRun(run: AgentRun, origin: string, cookie: str
             }
         }
         if (!plan) throw latestPlanningError instanceof Error ? latestPlanningError : new Error("没有可用的文本模型渠道");
-        if (claimed.surface === "canvas") plan = normalizeCanvasPlanForSelection(plan, claimed.snapshot, claimed.prompt);
+        if (claimed.surface === "canvas") plan = normalizeCanvasPlanForSelection(plan, planningRun.snapshot, claimed.prompt);
         const skills = selectAgentSkills(settings, claimed.surface, claimed.selectedSkillIds, plan.skillIds);
         await updateAgentRunById(run.id, {}, { type: "skills.selected", data: { skills: skills.map((skill) => ({ id: skill.id, name: skill.name })) } }, ["running"], executionId);
         if (!(await canContinue(run.id, executionId))) {
@@ -119,6 +125,7 @@ export async function executeAgentRun(run: AgentRun, origin: string, cookie: str
                 run.id,
                 {
                     status: "completed",
+                    snapshot: planningRun.snapshot,
                     tasks: [],
                     reviewed: true,
                     executionId: undefined,
@@ -135,13 +142,65 @@ export async function executeAgentRun(run: AgentRun, origin: string, cookie: str
             planningPersisted = true;
             return;
         }
-        const tasks = normalizeTasks(plan, skills, settings, claimed.snapshot, claimed.prompt, claimed.surface, referencedAssets, claimed.requestedImageSize, requestedModelIds);
+        const tasks = normalizeTasks(plan, skills, settings, planningRun.snapshot, claimed.prompt, claimed.surface, referencedAssets, claimed.requestedImageSize, requestedModelIds);
         const projectHandoff = normalizeAgentProjectHandoff(plan, claimed.surface, referencedAssets, claimed.prompt);
         const reply = agentPlanReply({ ...plan, projectHandoff }, tasks, claimed.surface);
-        const event = claimed.surface === "canvas" ? { type: "canvas.ops", data: { ops: planToOps(plan, tasks, run.id, claimed.snapshot), reply } } : { type: "run.planned", data: { reply, tasks: tasks.map(taskPlanSummary), projectHandoff } };
+        const workspaceActionRequest =
+            (claimed.surface === "canvas" || claimed.surface === "design") && (plan.workspaceActions?.length || tasks.length)
+                ? await buildAgentWorkspaceActionRequestForRun(
+                      claimed,
+                      plan.workspaceActions || [],
+                      tasks.map((task) => ({ id: task.id, title: task.title, type: task.type })),
+                      trustedWorkspaceSnapshot,
+                  )
+                : undefined;
+        if (workspaceActionRequest) {
+            const planned = await updateAgentRunById(
+                run.id,
+                {
+                    status: "awaiting_confirmation",
+                    executionId: undefined,
+                    snapshot: planningRun.snapshot,
+                    tasks,
+                    workspaceActionRequest,
+                    workspaceActionReceipt: undefined,
+                    foundation: plan.foundation,
+                    projectHandoff,
+                    reviewed: tasks.length ? claimed.reviewed : true,
+                    timings: { ...(claimed.timings || { requestAcceptedAt: claimed.createdAt }), planningCompletedAt: Date.now() },
+                },
+                {
+                    type: "workspace.actions",
+                    data: {
+                        request: workspaceActionRequest,
+                        requiresConfirmation: workspaceActionRequiresConfirmation(workspaceActionRequest),
+                        reply,
+                        tasks: tasks.map(taskPlanSummary),
+                        projectHandoff,
+                    },
+                },
+                ["running"],
+                executionId,
+            );
+            if (!planned) {
+                await refundAcceptedPlan();
+                return;
+            }
+            planningPersisted = true;
+            await scheduleGenerationTask("agent", run.id, { executionPhase: "awaiting_confirmation", nextPollAt: undefined, lastUpstreamStatus: "awaiting_confirmation" });
+            return;
+        }
+        const event = claimed.surface === "canvas" ? { type: "canvas.ops", data: { ops: planToOps(plan, tasks, run.id, planningRun.snapshot), reply } } : { type: "run.planned", data: { reply, tasks: tasks.map(taskPlanSummary), projectHandoff } };
         const planned = await updateAgentRunById(
             run.id,
-            { tasks, foundation: plan.foundation, projectHandoff, reviewed: tasks.length ? claimed.reviewed : true, timings: { ...(claimed.timings || { requestAcceptedAt: claimed.createdAt }), planningCompletedAt: Date.now() } },
+            {
+                snapshot: planningRun.snapshot,
+                tasks,
+                foundation: plan.foundation,
+                projectHandoff,
+                reviewed: tasks.length ? claimed.reviewed : true,
+                timings: { ...(claimed.timings || { requestAcceptedAt: claimed.createdAt }), planningCompletedAt: Date.now() },
+            },
             event,
             ["running"],
             executionId,
@@ -161,7 +220,7 @@ export async function executeAgentRun(run: AgentRun, origin: string, cookie: str
             failure = refundError;
         }
         const latest = await getAgentRun(run.id);
-        if (latest && !["paused", "cancelled"].includes(latest.status))
+        if (latest && !["awaiting_confirmation", "paused", "cancelled"].includes(latest.status))
             await updateAgentRunById(
                 run.id,
                 { status: "failed", executionId: undefined, timings: { ...(latest.timings || { requestAcceptedAt: latest.createdAt }), runCompletedAt: Date.now() } },

@@ -4,11 +4,15 @@ import dynamic from "next/dynamic";
 import { useCallback, useMemo } from "react";
 
 import { nanoid } from "nanoid";
+import { canvasProjectRevision, type CanvasSaveReceipt } from "@/lib/canvas-project-receipt";
+import type { WorkspaceActionReceipt, WorkspaceActionRequest } from "@/lib/creative-workspace";
+import { useCanvasStore } from "../stores/use-canvas-store";
 import { buildNodeGenerationInputs, type NodeGenerationInput } from "../components/canvas-node-generation";
 import { getNodeSpec } from "../constants";
 import { CanvasNodeType, type CanvasConnection, type ConnectionHandle, type Position } from "../types";
 import { useCanvasLocalAgentBridge } from "../use-canvas-local-agent-bridge";
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "../utils/canvas-agent-ops";
+import { executeCanvasWorkspaceActions } from "../utils/canvas-workspace-agent-adapter";
 import { buildCanvasResourceReferences, buildNodeMentionReferences } from "../utils/canvas-resource-references";
 import { shouldReduceCanvasEffects } from "../utils/canvas-performance-mode";
 import { clampAnchorRatio, nodeAnchorRatioAtY, splitCanvasConnectionAtNode } from "../utils/canvas-connection-path";
@@ -32,6 +36,8 @@ export function useCanvasInteractionCore({ state }: { state: CanvasPageState }) 
         nodeDraggingRef,
         effectiveConfig,
         currentProject,
+        updateProject,
+        flushProject,
         nodes,
         setNodes,
         connections,
@@ -382,7 +388,7 @@ export function useCanvasInteractionCore({ state }: { state: CanvasPageState }) 
         [connections, currentProject?.title, effectiveConfig.size, nodes, projectId, selectedNodeIds, viewport],
     );
     const applyAgentOps = useCallback(
-        (ops?: CanvasAgentOp[]) => {
+        (ops?: readonly CanvasAgentOp[]) => {
             const safeOps = Array.isArray(ops) ? ops.filter((op) => op?.type) : [];
             const before = {
                 projectId,
@@ -421,6 +427,50 @@ export function useCanvasInteractionCore({ state }: { state: CanvasPageState }) 
         },
         [currentProject?.title, effectiveConfig.size, projectId],
     );
+    const persistAgentSnapshot = useCallback(
+        async (snapshot: CanvasAgentSnapshot): Promise<CanvasSaveReceipt> => {
+            updateProject(projectId, { nodes: snapshot.nodes, connections: snapshot.connections, viewport: snapshot.viewport });
+            const receipt = await flushProject(projectId);
+            if (!receipt) throw new Error("Canvas 写操作没有产生服务端保存回执");
+            return receipt;
+        },
+        [flushProject, projectId, updateProject],
+    );
+    const prepareAgentRun = useCallback(async () => {
+        await persistAgentSnapshot({
+            projectId,
+            title: currentProject?.title || "未命名画布",
+            imageSize: effectiveConfig.size,
+            nodes: nodesRef.current,
+            connections: connectionsRef.current,
+            selectedNodeIds: Array.from(selectedNodeIdsRef.current),
+            viewport: viewportRef.current,
+        }).catch((error) => {
+            if (error instanceof Error && error.message === "Canvas 写操作没有产生服务端保存回执") return;
+            throw error;
+        });
+    }, [currentProject?.title, effectiveConfig.size, persistAgentSnapshot, projectId]);
+    const executeWorkspaceActions = useCallback(
+        async (request: WorkspaceActionRequest): Promise<WorkspaceActionReceipt> => {
+            const project = useCanvasStore.getState().projects.find((item) => item.id === projectId);
+            const snapshot: CanvasAgentSnapshot = {
+                projectId,
+                title: project?.title || "未命名画布",
+                imageSize: effectiveConfig.size,
+                nodes: nodesRef.current,
+                connections: connectionsRef.current,
+                selectedNodeIds: Array.from(selectedNodeIdsRef.current),
+                viewport: viewportRef.current,
+            };
+            return executeCanvasWorkspaceActions({
+                request,
+                state: { snapshot, revision: canvasProjectRevision(project || { revision: 0 }) },
+                applyOps: applyAgentOps,
+                persist: persistAgentSnapshot,
+            });
+        },
+        [applyAgentOps, effectiveConfig.size, persistAgentSnapshot, projectId],
+    );
     useCanvasLocalAgentBridge({ snapshot: agentSnapshot, onApplyOps: applyAgentOps });
     return {
         screenToCanvas,
@@ -454,6 +504,8 @@ export function useCanvasInteractionCore({ state }: { state: CanvasPageState }) 
         mentionReferencesByNodeId,
         agentSnapshot,
         applyAgentOps,
+        prepareAgentRun,
+        executeWorkspaceActions,
     };
 }
 

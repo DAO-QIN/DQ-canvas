@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { DEFAULT_SETTINGS } from "@/lib/auth/store-foundation";
 
-import { agentPlannerInput, compactCanvasSnapshot, plannerAgentSkills, selectAgentSkills } from "./agent-run-surface-policy";
+import { agentPlannerInput, compactCanvasSnapshot, compactDesignSnapshot, plannerAgentSkills, selectAgentSkills } from "./agent-run-surface-policy";
 import { filterAgentPlannerModels, resolveAgentPlanningProfile } from "./agent-run-planning-profile";
 
 describe("selectAgentSkills", () => {
@@ -29,9 +29,37 @@ describe("selectAgentSkills", () => {
         expect(selectAgentSkills(DEFAULT_SETTINGS, "drama", ["drama-planning"]).map((skill) => skill.id)).toEqual(["drama-planning"]);
         expect(selectAgentSkills(DEFAULT_SETTINGS, "drama", ["image-motion"])).toEqual([]);
     });
+
+    it("keeps Design skills isolated from Canvas and media workspaces", () => {
+        const settings = {
+            ...DEFAULT_SETTINGS,
+            agentSkills: [{ id: "design-layout", name: "画板排版", description: "整理画板布局", instructions: "保持层级清晰", enabled: true, keywords: ["排版"], workspaces: ["design" as const] }],
+        };
+        expect(selectAgentSkills(settings, "design", ["design-layout"]).map((skill) => skill.id)).toEqual(["design-layout"]);
+        expect(selectAgentSkills(settings, "canvas", ["design-layout"])).toEqual([]);
+    });
 });
 
 describe("agentPlannerInput", () => {
+    it("compacts Design entities and keeps only stable resource locators", () => {
+        const compact = compactDesignSnapshot({
+            projectId: "design-one",
+            title: "商品画板",
+            revision: 7,
+            selectionIds: ["element-one"],
+            entities: [
+                { id: "element-one", kind: "image", name: "商品图", parentId: "frame-one", bounds: { x: -20, y: 10, width: 400, height: 300 }, resource: { kind: "storage-key", storageKey: "permanent/product.png" } },
+                { id: "element-two", kind: "image", name: "临时图", resource: { kind: "remote-url", url: "https://signed.example/image" } },
+            ],
+            relations: [],
+        });
+
+        expect(compact).toMatchObject({ projectId: "design-one", revision: 7, selectionIds: ["element-one"] });
+        expect(compact.entities[0]).toMatchObject({ bounds: { x: -20, width: 400 }, resource: { kind: "storage-key", storageKey: "permanent/product.png" } });
+        expect(compact.entities[1]).not.toHaveProperty("resource");
+        expect(JSON.stringify(compact)).not.toContain("signed.example");
+    });
+
     it("keeps selected Canvas nodes, one-hop relations and exact size while dropping unrelated nodes", () => {
         const snapshot = {
             projectId: "canvas-one",
@@ -54,6 +82,41 @@ describe("agentPlannerInput", () => {
         expect(compact.nodes.map((node) => node.id)).toEqual(["config", "selected", "related"]);
         expect(compact.nodes[0]).toMatchObject({ metadata: { size: "400x600" } });
         expect(compact).not.toHaveProperty("viewport");
+        expect(JSON.stringify(compact)).not.toMatch(/reference-assets|\/old/);
+    });
+
+    it("projects legacy and shared Canvas snapshots to the same URL-free planner shape", () => {
+        const legacy = {
+            projectId: "canvas-one",
+            title: "商品画布",
+            selectedNodeIds: ["selected"],
+            nodes: [
+                { id: "selected", type: "image", title: "当前商品", width: 400, height: 600, metadata: { storageKey: "permanent/current.png", serverUrl: "/api/reference-assets/permanent/current.png?signature=secret" } },
+                { id: "related", type: "text", title: "关联文案", width: 300, height: 120, metadata: { content: "红色包装" } },
+            ],
+            connections: [{ id: "edge", fromNodeId: "related", toNodeId: "selected" }],
+        };
+        const shared = {
+            schemaVersion: 1,
+            surface: "canvas",
+            projectId: "canvas-one",
+            title: "商品画布",
+            revision: 3,
+            selectionIds: ["selected"],
+            entities: [
+                { id: "selected", kind: "image", name: "当前商品", bounds: { x: 0, y: 0, width: 400, height: 600 }, resource: { kind: "storage-key", storageKey: "permanent/current.png" } },
+                { id: "related", kind: "text", name: "关联文案", bounds: { x: 0, y: 0, width: 300, height: 120 }, text: "红色包装" },
+            ],
+            relations: [{ id: "edge", fromId: "related", toId: "selected", kind: "connection" }],
+            truncated: false,
+        };
+
+        const legacyCompact = compactCanvasSnapshot(legacy);
+        const sharedCompact = compactCanvasSnapshot(shared);
+        expect(sharedCompact.nodes).toEqual(legacyCompact.nodes);
+        expect(sharedCompact.connections).toEqual(legacyCompact.connections);
+        expect(sharedCompact.selectedNodeIds).toEqual(legacyCompact.selectedNodeIds);
+        expect(JSON.stringify([legacyCompact, sharedCompact])).not.toMatch(/reference-assets|signature|data:|blob:/);
     });
 
     it("enforces message, asset and Skill planner budgets without sending full instructions", () => {

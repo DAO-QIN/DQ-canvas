@@ -18,11 +18,13 @@ vi.mock("@/lib/server/data-adapter", () => ({
 import { getDatabaseProvider, postgresQuery } from "@/lib/server/database";
 import {
     createStoredGenerationTask,
+    getActiveStoredGenerationTaskBySourceIdentity,
     getActiveStoredGenerationTaskBySourceNode,
     getStoredGenerationTask,
     getStoredGenerationTaskByUpstream,
     listStoredGenerationTaskRecords,
     mutateStoredGenerationTask,
+    normalizeGenerationTaskContext,
     summarizeStoredGenerationTaskCosts,
     withGenerationConcurrencyLimit,
 } from "./generation-task-store";
@@ -164,6 +166,27 @@ describe("mutateStoredGenerationTask", () => {
         expect(mocks.records).toHaveLength(1);
     });
 
+    it("keeps only one active image processing task for the same Design source version", async () => {
+        mocks.records = [];
+        const now = Date.now();
+        const sourceIdentity = "design-element:design-one:element-one:version-one";
+        const first = await createStoredGenerationTask(
+            "image_process",
+            { id: "process-design-one", userId: "user", status: "pending", surface: "design", projectId: "design-one", sourceIdentity, sourceElementId: "element-one", sourceAssetVersionId: "version-one", createdAt: now, updatedAt: now },
+            60_000,
+        );
+        const duplicate = await createStoredGenerationTask(
+            "image_process",
+            { id: "process-design-two", userId: "user", status: "running", surface: "design", projectId: "design-one", sourceIdentity, sourceElementId: "element-one", sourceAssetVersionId: "version-one", createdAt: now, updatedAt: now + 1 },
+            60_000,
+        );
+
+        expect(first.id).toBe("process-design-one");
+        expect(duplicate.id).toBe("process-design-one");
+        expect(mocks.records).toHaveLength(1);
+        await expect(getActiveStoredGenerationTaskBySourceIdentity<{ id: string }>("image_process", "user", sourceIdentity, "design-one")).resolves.toMatchObject({ id: "process-design-one" });
+    });
+
     it("persists an image processing schedule in the same file write as task creation", async () => {
         mocks.records = [];
         const now = Date.now();
@@ -302,6 +325,26 @@ describe("listStoredGenerationTaskRecords", () => {
 
         expect(result.total).toBe(1);
         expect(result.items.map((item) => item.id)).toEqual(["older-running"]);
+    });
+
+    it("preserves Design as a first-class task surface in file storage", async () => {
+        vi.mocked(getDatabaseProvider).mockReturnValue("file");
+        mocks.records = [];
+        const now = Date.now();
+
+        await createStoredGenerationTask("image", { id: "design-task", userId: "user-one", status: "pending", surface: "design", projectId: "design-one", createdAt: now, updatedAt: now }, 60_000);
+
+        const result = await listStoredGenerationTaskRecords({ surface: "design", projectId: "design-one", userId: "user-one" });
+        expect(result.items).toEqual([expect.objectContaining({ id: "design-task", surface: "design", projectId: "design-one" })]);
+    });
+
+    it("normalizes a strict Design binding and rejects cross-surface or cross-project targets", () => {
+        const binding = { surface: "design" as const, projectId: "design-one", target: { scope: "frame" as const, frameId: "frame-one" }, elementId: "element-one" };
+
+        expect(normalizeGenerationTaskContext({ binding })).toMatchObject({ surface: "design", projectId: "design-one", binding });
+        expect(() => normalizeGenerationTaskContext({ surface: "canvas", projectId: "design-one", binding })).toThrow("任务 binding 与 surface 不一致");
+        expect(() => normalizeGenerationTaskContext({ surface: "design", projectId: "design-two", binding })).toThrow("任务 binding 与 projectId 不一致");
+        expect(() => normalizeGenerationTaskContext({ binding: { ...binding, target: { scope: "workspace", frameId: "forbidden" } } as never })).toThrow("target 包含未知字段 frameId");
     });
 
     it("pushes PostgreSQL filters, pagination and aggregate summary into database queries", async () => {

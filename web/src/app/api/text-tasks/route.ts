@@ -13,6 +13,7 @@ import { checkGenerationRateLimit, rateLimitHeaders } from "@/lib/server/securit
 import { createTextTask, type TextTask, type TextTaskConfig } from "@/lib/server/text-task-store";
 import type { AiTextMessage } from "@/types/ai";
 import type { GenerationTaskContext } from "@/lib/server/generation-task-store";
+import { prependDirectCreationSkillInstructions, requiredDirectCreationReferenceSkill } from "@/lib/server/direct-creation-skill";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,6 +21,7 @@ export const dynamic = "force-dynamic";
 type CreateTextTaskBody = {
     config?: TextTaskConfig;
     messages?: AiTextMessage[];
+    skillIds?: string[];
     context?: GenerationTaskContext;
 };
 
@@ -38,7 +40,13 @@ export async function POST(request: Request) {
             throw error;
         }
         const configs = sanitizeConfigs(body.config, settings);
-        const messages = sanitizeMessages(body.messages);
+        const rawMessages = sanitizeMessages(body.messages);
+        if (!configs.length || !rawMessages.length) return NextResponse.json({ error: "任务参数不完整" }, { status: 400 });
+        const requiredSkill = requiredDirectCreationReferenceSkill(body.skillIds, settings.agentSkills, "text");
+        if (requiredSkill && !rawMessages.some((message) => Array.isArray(message.content) && message.content.some((item) => item.type === "image_url"))) {
+            return NextResponse.json({ error: `Skill ${requiredSkill.name} requires a reference asset` }, { status: 400 });
+        }
+        const messages = prependDirectCreationSkillInstructions(rawMessages, body.skillIds, settings.agentSkills);
         if (!configs.length || !messages.length) return NextResponse.json({ error: "任务参数不完整" }, { status: 400 });
 
         const task = await createTextTask({ userId: currentUser.id, config: configs[0], candidateConfigs: configs.slice(1), messages, context: body.context });

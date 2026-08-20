@@ -124,6 +124,18 @@ describe("Docker Compose contracts", () => {
         expect(dockerfile).not.toContain('VOLUME ["/models"]');
     });
 
+    it("bakes the shared creative workspace flags into local application images", () => {
+        const dockerfile = readFileSync(path.join(repoRoot, "Dockerfile"), "utf8");
+        const localCompose = readFileSync(path.join(repoRoot, "docker-compose.local.yml"), "utf8");
+
+        for (const surface of ["CANVAS", "DESIGN"]) {
+            const name = `NEXT_PUBLIC_DQ_CREATIVE_WORKSPACE_${surface}_ENABLED`;
+            expect(dockerfile).toContain(`ARG ${name}=0`);
+            expect(dockerfile).toContain(`ENV ${name}=\${${name}}`);
+            expect(localCompose).toContain(`${name}: \${${name}:-1}`);
+        }
+    });
+
     it("reports an invalid docs service shape as a contract failure", () => {
         const profile = docsComposeProfiles[0];
 

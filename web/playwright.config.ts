@@ -7,7 +7,8 @@ const baseURL = `http://127.0.0.1:${port}`;
 const protocolFixturePort = Number(process.env.DQ_PROTOCOL_FIXTURE_PORT || 4010);
 const paymentFixturePort = Number(process.env.DQ_PAYMENT_FIXTURE_PORT || 4020);
 const databaseUrl = process.env.DQ_E2E_DATABASE_URL?.trim() || "";
-const storageState = path.join(process.cwd(), ".e2e-data", "admin-state.json");
+const e2eDataDir = path.resolve(process.cwd(), process.env.DQ_E2E_DATA_DIR?.trim() || ".e2e-data");
+const storageState = path.join(e2eDataDir, "admin-state.json");
 const e2eEncryptionKey = Buffer.alloc(32, 0x42).toString("hex");
 
 export default defineConfig({
@@ -29,7 +30,7 @@ export default defineConfig({
     },
     projects: [
         { name: "setup", testMatch: /installation\.spec\.ts/ },
-        { name: "chromium", testMatch: [/(?:auth|billing|core|gallery|responsive|rembg)\.spec\.ts/], dependencies: ["setup"], use: { ...devices["Desktop Chrome"], storageState } },
+        { name: "chromium", testMatch: [/(?:auth|billing|core|creative-workspace|design-engine-poc|design-fabric-probe|gallery|responsive|rembg)\.spec\.ts/], dependencies: ["setup"], use: { ...devices["Desktop Chrome"], storageState } },
         { name: "mobile-390", testMatch: /responsive\.spec\.ts/, dependencies: ["setup"], use: { ...devices["iPhone 13"], browserName: "chromium", viewport: { width: 390, height: 844 }, storageState } },
         { name: "mobile-430", testMatch: /responsive\.spec\.ts/, dependencies: ["setup"], use: { ...devices["iPhone 14 Pro Max"], browserName: "chromium", viewport: { width: 430, height: 932 }, storageState } },
     ],
@@ -60,12 +61,17 @@ export default defineConfig({
                 PORT: String(port),
                 NEXT_PUBLIC_SITE_URL: baseURL,
                 DQ_DATABASE_PROVIDER: databaseUrl ? "postgres" : "file",
-                DQ_DATA_DIR: path.join(process.cwd(), ".e2e-data"),
+                DQ_DATA_DIR: e2eDataDir,
                 DQ_ENCRYPTION_KEY: e2eEncryptionKey,
                 DQ_INSTALL_TOKEN: "dq-e2e-install-token-more-than-32-characters",
                 DQ_MAINTENANCE_TOKEN: "dq-e2e-maintenance-token-more-than-32-characters",
                 DQ_WORKER_TOKEN: "dq-e2e-worker-token-more-than-32-characters",
                 DQ_ALLOW_PRIVATE_UPSTREAMS: "1",
+                DQ_DESIGN_POC_ENABLED: "1",
+                DQ_DESIGN_FABRIC_PROBE_ENABLED: "1",
+                NEXT_PUBLIC_DQ_DESIGN_FABRIC_PROBE_ENABLED: "1",
+                NEXT_PUBLIC_DQ_CREATIVE_WORKSPACE_DESIGN_ENABLED: "1",
+                NEXT_PUBLIC_DQ_CREATIVE_WORKSPACE_CANVAS_ENABLED: "1",
                 DQ_PRIVATE_UPSTREAM_HOSTS: "127.0.0.1",
                 ...(process.env.DQ_E2E_REMBG_URL ? { DQ_REMBG_URL: process.env.DQ_E2E_REMBG_URL } : {}),
                 ...(databaseUrl ? { DATABASE_URL: databaseUrl } : {}),

@@ -17,6 +17,10 @@ const mocks = vi.hoisted(() => ({
     updateAgentRunById: vi.fn(),
     updateAgentRunTaskById: vi.fn(),
     scheduleGenerationTask: vi.fn(async () => undefined),
+    buildAgentWorkspaceActionRequestForRun: vi.fn(),
+    getAgentWorkspaceSnapshotForRun: vi.fn(),
+    resolveDesignResourceForUser: vi.fn(),
+    resolveWorkspaceMediaResourceForUser: vi.fn(),
 }));
 
 vi.mock("@/lib/auth/store", () => ({
@@ -32,6 +36,12 @@ vi.mock("@/lib/server/creative-runtime-store", () => ({
 }));
 vi.mock("@/lib/server/generation-task-store", () => ({ linkStoredGenerationTask: mocks.linkStoredGenerationTask }));
 vi.mock("@/lib/server/generation-task-scheduler", () => ({ scheduleGenerationTask: mocks.scheduleGenerationTask }));
+vi.mock("./agent-workspace-actions", () => ({
+    buildAgentWorkspaceActionRequestForRun: mocks.buildAgentWorkspaceActionRequestForRun,
+    getAgentWorkspaceSnapshotForRun: mocks.getAgentWorkspaceSnapshotForRun,
+}));
+vi.mock("@/lib/server/design-resource-resolver", () => ({ resolveDesignResourceForUser: mocks.resolveDesignResourceForUser }));
+vi.mock("@/lib/server/workspace-resource-resolver", () => ({ resolveWorkspaceMediaResourceForUser: mocks.resolveWorkspaceMediaResourceForUser }));
 vi.mock("@/lib/server/creative-review-service", () => ({ reviewCreativeOutputs: mocks.reviewCreativeOutputs }));
 vi.mock("@/lib/server/agent-run-store", async (importOriginal) => {
     const actual = await importOriginal<typeof import("@/lib/server/agent-run-store")>();
@@ -55,7 +65,37 @@ describe("executeAgentRun backend settings", () => {
         mocks.getCreativeAssetsByIds.mockResolvedValue([]);
         mocks.listRecentCreativeMediaAssets.mockResolvedValue([]);
         mocks.getCreativeConversationContext.mockResolvedValue({ summary: "", summaryThroughSequence: 0, recentMessages: [] });
+        mocks.getAgentWorkspaceSnapshotForRun.mockImplementation(async (run: AgentRun) => ({
+            schemaVersion: 1,
+            surface: run.surface === "design" ? "design" : "canvas",
+            projectId: run.projectId || "project",
+            title: "工作区",
+            revision: 0,
+            selectionIds: [],
+            entities: [],
+            relations: [],
+            truncated: false,
+        }));
+        mocks.resolveDesignResourceForUser.mockResolvedValue({ url: "/api/reference-assets/design/product.png", cacheKey: "storage:product", expiresAt: null });
+        mocks.resolveWorkspaceMediaResourceForUser.mockResolvedValue({ url: "/api/reference-assets/permanent/canvas/product.png", cacheKey: "storage:canvas-product", expiresAt: null, mediaType: "image" });
         mocks.reviewCreativeOutputs.mockResolvedValue({ mode: "visual", status: "passed", summary: "检查通过", issues: [], retryTaskIds: [] });
+        mocks.buildAgentWorkspaceActionRequestForRun.mockImplementation(async (run: AgentRun, _proposals: unknown[], tasks: AgentRunTask[]) => ({
+            surface: run.surface,
+            projectId: run.projectId,
+            baseRevision: 0,
+            batchId: `workspace-${run.id}`,
+            actions: [
+                {
+                    actionId: `authorize-${run.id}`,
+                    kind: "generate",
+                    effect: "write",
+                    command: "generation.authorize",
+                    label: "确认生成",
+                    targetIds: [],
+                    parameters: { taskIds: tasks.map((task) => task.id), taskTypes: tasks.map((task) => task.type) },
+                },
+            ],
+        }));
         mocks.registerCreativeAssets.mockImplementation(async (inputs: Array<Record<string, unknown>>) => inputs.map((input, index) => ({ ...input, id: `asset-${index}`, status: "ready", createdAt: 1, updatedAt: 1 })));
         mocks.updateAgentRunById.mockImplementation(async (_id, patch, event, allowedStatuses, expectedExecutionId) => {
             if (!mocks.run || (allowedStatuses && !allowedStatuses.includes(mocks.run.status)) || (expectedExecutionId && mocks.run.executionId !== expectedExecutionId)) return null;
@@ -124,6 +164,168 @@ describe("executeAgentRun backend settings", () => {
         const body = JSON.parse(String(createCall?.[1]?.body)) as { config: { model: string; baseUrl: string; apiKey: string } };
         expect(body.config).toMatchObject({ model: "old-image", baseUrl: "/api/ai/system/old-channel", apiKey: "" });
         expect(mocks.run?.status).toBe("completed");
+    });
+
+    it("dispatches a resumed Design image task with the same trusted binding and an ephemeral resolved reference", async () => {
+        const binding = { surface: "design" as const, projectId: "design-one", baseRevision: 7, target: { scope: "frame" as const, frameId: "frame-main" }, elementId: "element-product" };
+        const locator = { kind: "storage-key" as const, storageKey: "users/user/design/product.png" };
+        mocks.run = runFixture({
+            surface: "design",
+            projectId: "design-one",
+            status: "running",
+            executionId: "execution",
+            reviewed: true,
+            tasks: [{ ...imageTask("image-one"), binding, designReferenceLocator: locator }],
+        });
+        mocks.getAuthSettings.mockResolvedValue(settings("image-model", "image-channel"));
+
+        await executeAgentRun(mocks.run, "http://localhost", "session=test");
+
+        const createCall = mocks.fetchInternalApi.mock.calls.find(([url, init]) => init?.method === "POST" && String(url).endsWith("/api/image-tasks"));
+        const body = JSON.parse(String(createCall?.[1]?.body));
+        expect(mocks.resolveDesignResourceForUser).toHaveBeenCalledWith("user", locator);
+        expect(body).toMatchObject({
+            source: "agent",
+            kind: "edit",
+            references: [{ dataUrl: "", url: "/api/reference-assets/design/product.png" }],
+            context: { surface: "design", projectId: "design-one", binding },
+        });
+        expect(mocks.linkStoredGenerationTask).toHaveBeenCalledWith("image", "child-1", expect.objectContaining({ surface: "design", projectId: "design-one", binding }));
+        expect(mocks.run?.tasks[0]).toMatchObject({ status: "completed", binding, designReferenceLocator: locator });
+        expect(JSON.stringify(mocks.run)).not.toContain("/api/reference-assets/design/product.png");
+    });
+
+    it("dispatches a resumed Canvas task by resolving its stable locator only for the child request", async () => {
+        const locator = { kind: "storage-key" as const, storageKey: "permanent/canvas/product.png" };
+        mocks.run = runFixture({
+            surface: "canvas",
+            projectId: "canvas-one",
+            status: "running",
+            executionId: "execution",
+            reviewed: true,
+            tasks: [{ ...imageTask("image-one"), targetNodeId: "product", referenceLocator: locator }],
+        });
+        mocks.getAuthSettings.mockResolvedValue(settings("image-model", "image-channel"));
+
+        await executeAgentRun(mocks.run, "http://localhost", "session=test");
+
+        const createCall = mocks.fetchInternalApi.mock.calls.find(([url, init]) => init?.method === "POST" && String(url).endsWith("/api/image-tasks"));
+        const body = JSON.parse(String(createCall?.[1]?.body));
+        expect(mocks.resolveWorkspaceMediaResourceForUser).toHaveBeenCalledWith("user", locator, ["image"]);
+        expect(body).toMatchObject({
+            source: "canvas",
+            kind: "edit",
+            references: [{ dataUrl: "", url: "/api/reference-assets/permanent/canvas/product.png" }],
+            context: { surface: "canvas", projectId: "canvas-one" },
+        });
+        expect(mocks.run?.tasks[0]).toMatchObject({ status: "completed", referenceLocator: locator });
+        expect(JSON.stringify(mocks.run)).not.toContain("/api/reference-assets/permanent/canvas/product.png");
+    });
+
+    it("uses one server-owned Design snapshot for planning, binding and confirmation", async () => {
+        const trustedSnapshot = {
+            schemaVersion: 1 as const,
+            surface: "design" as const,
+            projectId: "design-one",
+            title: "商品主图",
+            revision: 7,
+            selectionIds: ["element-product"],
+            entities: [
+                { id: "frame-main", kind: "frame", name: "主画框", bounds: { x: 0, y: 0, width: 1200, height: 1200 } },
+                { id: "element-product", kind: "image", name: "商品", parentId: "frame-main", bounds: { x: 100, y: 100, width: 800, height: 800 }, resource: { kind: "storage-key" as const, storageKey: "users/user/design/product.png" } },
+            ],
+            relations: [],
+            truncated: false,
+        };
+        mocks.run = runFixture({ surface: "design", projectId: "design-one", snapshot: { revision: 999, selectionIds: ["forged"] }, prompt: "生成夏日商品图" });
+        mocks.getAgentWorkspaceSnapshotForRun.mockResolvedValue(trustedSnapshot);
+        mocks.getAuthSettings.mockResolvedValue(settings("image-model", "image-channel"));
+        mocks.fetchInternalApi.mockImplementation(async (url: string) => {
+            if (String(url).endsWith("/responses") || String(url).endsWith("/chat/completions")) {
+                return Response.json({ output: [{ type: "function_call", name: "create_agent_plan", arguments: JSON.stringify(canvasPlan("image-model")) }] });
+            }
+            throw new Error(`unexpected request: ${url}`);
+        });
+
+        await executeAgentRun(mocks.run, "http://localhost", "session=test");
+
+        expect(mocks.getAgentWorkspaceSnapshotForRun).toHaveBeenCalledOnce();
+        expect(mocks.buildAgentWorkspaceActionRequestForRun).toHaveBeenCalledWith(expect.objectContaining({ surface: "design", projectId: "design-one" }), [], [expect.objectContaining({ id: "main", type: "image" })], trustedSnapshot);
+        const planningCall = mocks.fetchInternalApi.mock.calls.find(([url]) => String(url).endsWith("/responses") || String(url).endsWith("/chat/completions"));
+        const planningBody = JSON.parse(String(planningCall?.[1]?.body));
+        const planningInput = JSON.parse(planningBody.messages.find((message: { role: string }) => message.role === "user").content);
+        expect(planningInput.designSnapshot).toMatchObject({ projectId: "design-one", revision: 7, selectionIds: ["element-product"] });
+        expect(mocks.run).toMatchObject({
+            status: "awaiting_confirmation",
+            tasks: [
+                expect.objectContaining({
+                    binding: { surface: "design", projectId: "design-one", baseRevision: 7, target: { scope: "frame", frameId: "frame-main" }, elementId: "element-product" },
+                    referenceLocator: { kind: "storage-key", storageKey: "users/user/design/product.png" },
+                }),
+            ],
+        });
+        expect(mocks.run?.tasks[0]).not.toHaveProperty("designReferenceLocator");
+    });
+
+    it("uses one server-owned Canvas snapshot for planning, task locator and confirmation", async () => {
+        const trustedSnapshot = {
+            schemaVersion: 1 as const,
+            surface: "canvas" as const,
+            projectId: "canvas-one",
+            title: "商品画布",
+            revision: 9,
+            selectionIds: ["product"],
+            entities: [
+                {
+                    id: "product",
+                    kind: "image",
+                    name: "当前商品",
+                    bounds: { x: 20, y: 30, width: 400, height: 600 },
+                    resource: { kind: "storage-key" as const, storageKey: "permanent/canvas/product.png" },
+                },
+            ],
+            relations: [],
+            truncated: false,
+        };
+        mocks.run = runFixture({
+            surface: "canvas",
+            projectId: "canvas-one",
+            snapshot: {
+                selectedNodeIds: ["forged"],
+                nodes: [{ id: "forged", type: "image", metadata: { dataUrl: "data:image/png;base64,secret", serverUrl: "/api/reference-assets/forged.png?signature=secret" } }],
+            },
+            prompt: "把当前商品换成夏日版本",
+        });
+        mocks.getAgentWorkspaceSnapshotForRun.mockResolvedValue(trustedSnapshot);
+        mocks.getAuthSettings.mockResolvedValue(settings("image-model", "image-channel"));
+        mocks.fetchInternalApi.mockImplementation(async (url: string) => {
+            if (String(url).endsWith("/responses") || String(url).endsWith("/chat/completions")) {
+                return Response.json({ output: [{ type: "function_call", name: "create_agent_plan", arguments: JSON.stringify(canvasPlan("image-model")) }] });
+            }
+            throw new Error(`unexpected request: ${url}`);
+        });
+
+        await executeAgentRun(mocks.run, "http://localhost", "session=test");
+
+        expect(mocks.getAgentWorkspaceSnapshotForRun).toHaveBeenCalledOnce();
+        expect(mocks.buildAgentWorkspaceActionRequestForRun).toHaveBeenCalledWith(expect.objectContaining({ surface: "canvas", projectId: "canvas-one" }), [], [expect.objectContaining({ id: "main", type: "image" })], trustedSnapshot);
+        const planningCall = mocks.fetchInternalApi.mock.calls.find(([url]) => String(url).endsWith("/responses") || String(url).endsWith("/chat/completions"));
+        const planningBody = JSON.parse(String(planningCall?.[1]?.body));
+        const planningInput = JSON.parse(planningBody.messages.find((message: { role: string }) => message.role === "user").content);
+        expect(planningInput.canvasSnapshot).toMatchObject({ projectId: "canvas-one", revision: 9, selectedNodeIds: ["product"] });
+        expect(JSON.stringify(planningInput)).not.toMatch(/forged|data:image|reference-assets|signature/);
+        expect(mocks.run).toMatchObject({
+            status: "awaiting_confirmation",
+            snapshot: trustedSnapshot,
+            tasks: [
+                expect.objectContaining({
+                    targetNodeId: "product",
+                    referenceLocator: { kind: "storage-key", storageKey: "permanent/canvas/product.png" },
+                }),
+            ],
+        });
+        expect(mocks.run?.tasks[0]).not.toHaveProperty("referenceUrl");
+        expect(mocks.run?.tasks[0]).not.toHaveProperty("designReferenceLocator");
     });
 
     it("completes a single media run and schedules its persistent review", async () => {
@@ -197,7 +399,7 @@ describe("executeAgentRun backend settings", () => {
         expect(mocks.run?.status).toBe("completed");
     });
 
-    it("creates Canvas plan nodes when a generation model is selected explicitly", async () => {
+    it("waits for explicit confirmation before creating Canvas plan nodes or media tasks", async () => {
         mocks.run = runFixture({ surface: "canvas", prompt: "生成商品主图", requestedModelIds: ["image-model"] });
         mocks.getAuthSettings.mockResolvedValue(settings("image-model", "image-channel"));
         mocks.fetchInternalApi.mockImplementation(async (url: string, init?: RequestInit) => {
@@ -210,13 +412,14 @@ describe("executeAgentRun backend settings", () => {
         await executeAgentRun(mocks.run, "http://localhost", "session=test");
 
         expect(mocks.events.find((event) => event.type === "run.planned")).toBeUndefined();
-        expect(mocks.events.find((event) => event.type === "canvas.ops")?.data).toMatchObject({
-            ops: expect.arrayContaining([expect.objectContaining({ type: "add_node", id: "task-agent-run-0", nodeType: "task" }), expect.objectContaining({ type: "add_node", id: "output-agent-run-0-0", nodeType: "image" })]),
+        expect(mocks.events.find((event) => event.type === "canvas.ops")).toBeUndefined();
+        expect(mocks.events.find((event) => event.type === "workspace.actions")?.data).toMatchObject({
+            request: { surface: "canvas", batchId: "workspace-agent-run", actions: [expect.objectContaining({ command: "generation.authorize", effect: "write" })] },
+            requiresConfirmation: true,
         });
-        expect(mocks.events.find((event) => event.type === "canvas.ops")?.data).toMatchObject({
-            ops: expect.arrayContaining([expect.objectContaining({ type: "add_node", id: "task-agent-run-0", metadata: expect.objectContaining({ model: "image-model" }) })]),
-        });
-        expect(mocks.run?.status).toBe("completed");
+        expect(mocks.fetchInternalApi.mock.calls.some(([url, init]) => init?.method === "POST" && String(url).endsWith("/api/image-tasks"))).toBe(false);
+        expect(mocks.run).toMatchObject({ status: "awaiting_confirmation", executionId: undefined, tasks: [expect.objectContaining({ model: "image-model", status: "ready" })] });
+        expect(mocks.scheduleGenerationTask).toHaveBeenCalledWith("agent", "agent-run", { executionPhase: "awaiting_confirmation", nextPollAt: undefined, lastUpstreamStatus: "awaiting_confirmation" });
     });
 
     it("does not complete the run when it is paused during a parallel batch", async () => {
@@ -456,7 +659,7 @@ describe("executeAgentRun backend settings", () => {
         expect(mocks.run?.executionId).toBe("replacement-executor");
     });
 
-    it("accepts a strict JSON canvas plan and executes the model selected by the Agent", async () => {
+    it("accepts a strict JSON canvas plan and persists the model selected by the Agent before confirmation", async () => {
         mocks.run = planningRun();
         mocks.getAuthSettings.mockResolvedValue(canvasSettings("image-default", "image-default-channel", "image-creative", "image-creative-channel"));
         const plan = canvasPlan("image-creative");
@@ -474,12 +677,10 @@ describe("executeAgentRun backend settings", () => {
         const planningBody = JSON.parse(String(planningCall?.[1]?.body)) as { messages: Array<{ content: string }> };
         const planningInput = JSON.parse(planningBody.messages[1].content) as { availableModels: Array<{ id: string; capability: string }> };
         expect(planningInput.availableModels).toEqual(expect.arrayContaining([expect.objectContaining({ id: "image-default", capability: "image" }), expect.objectContaining({ id: "image-creative", capability: "image" })]));
-        const createCall = mocks.fetchInternalApi.mock.calls.find(([url, init]) => init?.method === "POST" && String(url).endsWith("/api/image-tasks"));
-        const createBody = JSON.parse(String(createCall?.[1]?.body)) as { config: { model: string } };
-        expect(createBody.config.model).toBe("image-creative");
-        const planEvent = mocks.events.find((event) => event.type === "canvas.ops") as { data?: { reply?: string } } | undefined;
+        expect(mocks.fetchInternalApi.mock.calls.some(([url, init]) => init?.method === "POST" && String(url).endsWith("/api/image-tasks"))).toBe(false);
+        const planEvent = mocks.events.find((event) => event.type === "workspace.actions") as { data?: { reply?: string } } | undefined;
         expect(planEvent?.data?.reply).toBe("已收到，我会按你的要求完成这次画布创作。");
-        expect(mocks.run?.status).toBe("completed");
+        expect(mocks.run).toMatchObject({ status: "awaiting_confirmation", tasks: [expect.objectContaining({ model: "image-creative" })] });
     });
 
     it("passes the persistent summary and recent messages to the planner", async () => {
@@ -896,8 +1097,8 @@ describe("executeAgentRun backend settings", () => {
 
         await executeAgentRun(mocks.run, "http://localhost", "session=test");
 
-        expect(mocks.run).toMatchObject({ status: "completed", projectHandoff: undefined });
-        expect(mocks.fetchInternalApi.mock.calls.some(([url, init]) => init?.method === "POST" && String(url).endsWith("/api/image-tasks"))).toBe(true);
+        expect(mocks.run).toMatchObject({ status: "awaiting_confirmation", projectHandoff: undefined, tasks: [expect.objectContaining({ status: "ready" })] });
+        expect(mocks.fetchInternalApi.mock.calls.some(([url, init]) => init?.method === "POST" && String(url).endsWith("/api/image-tasks"))).toBe(false);
         expect(mocks.events.some((event) => event.type === "project.handoff")).toBe(false);
     });
 
@@ -914,10 +1115,9 @@ describe("executeAgentRun backend settings", () => {
 
         await executeAgentRun(mocks.run, "http://localhost", "session=test");
 
-        const createCall = mocks.fetchInternalApi.mock.calls.find(([url, init]) => init?.method === "POST" && String(url).endsWith("/api/image-tasks"));
-        const createBody = JSON.parse(String(createCall?.[1]?.body)) as { config: { model: string } };
-        expect(createBody.config.model).toBe("image-default");
+        expect(mocks.fetchInternalApi.mock.calls.some(([url, init]) => init?.method === "POST" && String(url).endsWith("/api/image-tasks"))).toBe(false);
         expect(mocks.run?.tasks[0].model).toBe("image-default");
+        expect(mocks.run?.status).toBe("awaiting_confirmation");
     });
 
     it("refunds text planning cost when chat fallback returns prose instead of structured JSON", async () => {

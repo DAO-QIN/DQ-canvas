@@ -6,7 +6,11 @@ docs/.source
 docs/node_modules
 docs/out
 web/.next
+web/.next-*
 web/.data
+web/.data-*
+web/.e2e-*
+web/.phase4*
 web/node_modules
 web/out
 *.log

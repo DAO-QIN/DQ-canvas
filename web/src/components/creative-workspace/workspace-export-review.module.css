@@ -1,0 +1,386 @@
+.dialog {
+    width: min(920px, calc(100vw - 32px));
+    max-width: none;
+    height: min(720px, calc(100dvh - 32px));
+    max-height: none;
+    padding: 0;
+    overflow: hidden;
+    color: var(--creative-workspace-foreground);
+    border: 1px solid var(--creative-workspace-panel-border);
+    border-radius: 8px;
+    outline: none;
+    background: var(--creative-workspace-panel);
+    box-shadow: 0 24px 80px rgb(0 0 0 / 42%);
+}
+
+.dialog::backdrop {
+    background: rgb(5 8 12 / 58%);
+    backdrop-filter: blur(4px);
+}
+
+.panel {
+    display: grid;
+    height: 100%;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+}
+.header,
+.footer,
+.sectionHeader,
+.heading,
+.rangeActions,
+.qualityRow {
+    display: flex;
+    align-items: center;
+}
+.header {
+    min-height: 58px;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 0 18px;
+    border-bottom: 1px solid var(--creative-workspace-panel-border);
+}
+.heading {
+    min-width: 0;
+    gap: 9px;
+}
+.heading h2 {
+    overflow: hidden;
+    margin: 0;
+    font-size: 16px;
+    font-weight: 650;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.heading span {
+    padding: 2px 6px;
+    color: var(--creative-workspace-muted);
+    border: 1px solid var(--creative-workspace-panel-border);
+    border-radius: 6px;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+}
+.iconButton {
+    display: inline-grid;
+    width: 34px;
+    height: 34px;
+    flex: 0 0 34px;
+    place-items: center;
+    padding: 0;
+    color: var(--creative-workspace-muted);
+    border: 0;
+    border-radius: 7px;
+    outline: none;
+    background: transparent;
+    cursor: pointer;
+}
+.iconButton:hover:not(:disabled),
+.rangeActions button:hover:not(:disabled),
+.secondaryButton:hover:not(:disabled) {
+    color: var(--creative-workspace-foreground);
+    background: var(--creative-workspace-control-hover);
+}
+.iconButton:focus-visible,
+.rangeActions button:focus-visible,
+.segmented button:focus-visible,
+.secondaryButton:focus-visible,
+.primaryButton:focus-visible,
+.itemRow:has(input:focus-visible) {
+    outline: 2px solid var(--creative-workspace-focus);
+    outline-offset: 2px;
+}
+.body {
+    display: grid;
+    min-height: 0;
+    grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.8fr);
+}
+.itemSection,
+.settingsSection {
+    min-width: 0;
+    min-height: 0;
+}
+.itemSection {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    border-right: 1px solid var(--creative-workspace-panel-border);
+}
+.sectionHeader {
+    min-height: 46px;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--creative-workspace-panel-border);
+    font-size: 12px;
+}
+.rangeActions {
+    gap: 3px;
+}
+.rangeActions button {
+    height: 28px;
+    padding: 0 8px;
+    color: var(--creative-workspace-muted);
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+    font-size: 11px;
+}
+.itemList {
+    min-height: 0;
+    padding: 8px;
+    overflow: auto;
+    overscroll-behavior: contain;
+}
+.itemRow {
+    display: grid;
+    min-height: 70px;
+    grid-template-columns: 18px 74px minmax(0, 1fr) 22px;
+    align-items: center;
+    gap: 10px;
+    padding: 8px;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    cursor: pointer;
+}
+.itemRow:hover {
+    background: var(--creative-workspace-control-hover);
+}
+.itemSelected {
+    border-color: color-mix(in srgb, var(--creative-workspace-focus) 48%, var(--creative-workspace-panel-border));
+    background: color-mix(in srgb, var(--creative-workspace-active) 8%, transparent);
+}
+.itemRow input {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: var(--creative-workspace-active);
+}
+.preview {
+    display: grid;
+    width: 74px;
+    max-height: 54px;
+    place-items: center;
+    overflow: hidden;
+    color: var(--creative-workspace-muted);
+    border: 1px solid var(--creative-workspace-panel-border);
+    border-radius: 4px;
+    background-color: #fff;
+    background-image: linear-gradient(45deg, #e5e7eb 25%, transparent 25%), linear-gradient(-45deg, #e5e7eb 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e5e7eb 75%), linear-gradient(-45deg, transparent 75%, #e5e7eb 75%);
+    background-position:
+        0 0,
+        0 5px,
+        5px -5px,
+        -5px 0;
+    background-size: 10px 10px;
+}
+.preview img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+.itemText {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 3px;
+}
+.itemText strong,
+.itemText small,
+.itemText em {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.itemText strong {
+    font-size: 12px;
+    font-weight: 620;
+}
+.itemText small,
+.itemText em {
+    color: var(--creative-workspace-muted);
+    font-size: 10px;
+    font-style: normal;
+}
+.itemText em {
+    color: var(--creative-workspace-danger);
+}
+.selectedIcon {
+    color: var(--creative-workspace-success);
+}
+.settingsSection {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    padding: 18px;
+    overflow: auto;
+}
+.settingGroup {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+.settingGroup > span,
+.qualityRow > span {
+    color: var(--creative-workspace-muted);
+    font-size: 11px;
+    font-weight: 620;
+}
+.segmented {
+    display: grid;
+    grid-auto-columns: minmax(0, 1fr);
+    grid-auto-flow: column;
+    gap: 3px;
+    padding: 3px;
+    border: 1px solid var(--creative-workspace-panel-border);
+    border-radius: 7px;
+}
+.segmented button {
+    min-width: 0;
+    height: 32px;
+    padding: 0 7px;
+    color: var(--creative-workspace-muted);
+    border: 0;
+    border-radius: 5px;
+    outline: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: 11px;
+}
+.segmented button:hover:not(:disabled) {
+    color: var(--creative-workspace-foreground);
+    background: var(--creative-workspace-control-hover);
+}
+.segmented .segmentActive {
+    color: var(--creative-workspace-active-foreground);
+    background: var(--creative-workspace-active);
+}
+.qualityRow {
+    min-height: 34px;
+    gap: 10px;
+}
+.qualityRow > span {
+    width: 34px;
+    flex: 0 0 34px;
+}
+.qualityRow input {
+    min-width: 0;
+    flex: 1 1 auto;
+    accent-color: var(--creative-workspace-active);
+}
+.qualityRow output {
+    width: 38px;
+    flex: 0 0 38px;
+    color: var(--creative-workspace-foreground);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+.footer {
+    min-height: 64px;
+    gap: 8px;
+    padding: 10px 14px;
+    border-top: 1px solid var(--creative-workspace-panel-border);
+}
+.progress {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    color: var(--creative-workspace-muted);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.error {
+    color: var(--creative-workspace-danger);
+}
+.success {
+    color: var(--creative-workspace-success);
+}
+.secondaryButton,
+.primaryButton {
+    display: inline-flex;
+    height: 36px;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 0 14px;
+    border-radius: 7px;
+    outline: none;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 620;
+}
+.secondaryButton {
+    color: var(--creative-workspace-foreground);
+    border: 1px solid var(--creative-workspace-panel-border);
+    background: transparent;
+}
+.primaryButton {
+    min-width: 104px;
+    color: var(--creative-workspace-active-foreground);
+    border: 1px solid transparent;
+    background: var(--creative-workspace-active);
+}
+.iconButton:disabled,
+.rangeActions button:disabled,
+.segmented button:disabled,
+.secondaryButton:disabled,
+.primaryButton:disabled {
+    cursor: not-allowed;
+    opacity: 0.38;
+}
+.spinner {
+    animation: workspace-export-spin 800ms linear infinite;
+}
+
+@keyframes workspace-export-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@media (max-width: 680px) {
+    .dialog {
+        width: calc(100vw - 16px);
+        height: calc(100dvh - 16px);
+    }
+    .body {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(220px, 1fr) auto;
+        overflow: auto;
+    }
+    .itemSection {
+        border-right: 0;
+        border-bottom: 1px solid var(--creative-workspace-panel-border);
+    }
+    .settingsSection {
+        overflow: visible;
+    }
+    .footer {
+        flex-wrap: wrap;
+    }
+    .progress {
+        width: 100%;
+        flex-basis: 100%;
+    }
+}
+
+@media (max-width: 420px) {
+    .itemRow {
+        grid-template-columns: 18px 58px minmax(0, 1fr) 18px;
+        gap: 7px;
+    }
+    .preview {
+        width: 58px;
+    }
+    .secondaryButton,
+    .primaryButton {
+        flex: 1 1 0;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .spinner {
+        animation: none;
+    }
+}

@@ -12,6 +12,8 @@ import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { DiaTextReveal } from "@/components/ui/dia-text-reveal";
 import { SiteLogo } from "@/components/layout/site-logo";
+import { WorkspaceAgentActionCard } from "@/components/creative-workspace";
+import { createWorkspaceAgentActionController, createWorkspaceAgentRunController, type WorkspaceActionReceipt, type WorkspaceActionRequest, type WorkspaceAgentActionController, type WorkspaceAgentActionState } from "@/lib/creative-workspace";
 import { CreativeAgentControls, CreativeAgentSkillCard, type CreativeAgentModelOption } from "@/components/agent/creative-agent-controls";
 import { useCreativeAgentOptions } from "@/hooks/use-creative-agent-options";
 import { CanvasPromptLibrary } from "./canvas-prompt-library";
@@ -27,6 +29,7 @@ import { CanvasNodeType, type CanvasAssistantMessage, type CanvasAssistantRefere
 import type { CanvasAgentOp, CanvasAgentSnapshot } from "../utils/canvas-agent-ops";
 
 const PANEL_MOTION_SECONDS = CANVAS_AGENT_PANEL_MOTION_MS / 1000;
+const agentRunController = createWorkspaceAgentRunController();
 type OnlineAgentTab = "chat" | "history";
 
 type CanvasAssistantPanelProps = {
@@ -39,11 +42,14 @@ type CanvasAssistantPanelProps = {
     onSelectNodeIds: (ids: Set<string>) => void;
     onSessionsChange: (sessions: CanvasAssistantSession[], activeSessionId: string | null) => void;
     onConversationChange: (conversationId: string) => void;
-    onApplyOps: (ops?: CanvasAgentOp[]) => CanvasAgentSnapshot;
+    onApplyOps: (ops?: readonly CanvasAgentOp[]) => CanvasAgentSnapshot;
+    onPrepareRun: () => Promise<void>;
+    onExecuteWorkspaceActions: (request: WorkspaceActionRequest) => Promise<WorkspaceActionReceipt>;
     onLocateNode: (nodeId: string) => void;
     onPasteImage: (file: File) => Promise<string>;
     closing: boolean;
     onCollapse: () => void;
+    hosted?: boolean;
 };
 
 import {
@@ -72,10 +78,13 @@ export function CanvasAssistantPanel({
     onSessionsChange,
     onConversationChange,
     onApplyOps,
+    onPrepareRun,
+    onExecuteWorkspaceActions,
     onLocateNode,
     onPasteImage,
     closing,
     onCollapse,
+    hosted = false,
 }: CanvasAssistantPanelProps) {
     const { message } = App.useApp();
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
@@ -92,6 +101,7 @@ export function CanvasAssistantPanel({
     const [activeRunId, setActiveRunId] = useState("");
     const [runPaused, setRunPaused] = useState(false);
     const [runStage, setRunStage] = useState<CanvasAgentRunStage>({ key: "planning", text: "正在理解你的需求" });
+    const [workspaceActionState, setWorkspaceActionState] = useState<WorkspaceAgentActionState>({ status: "idle" });
     const [deleteChatIds, setDeleteChatIds] = useState<string[]>([]);
     const [resizing, setResizing] = useState(false);
     const [removedReferenceIds, setRemovedReferenceIds] = useState<Set<string>>(new Set());
@@ -100,6 +110,8 @@ export function CanvasAssistantPanel({
     const snapshotRef = useRef(snapshot);
     const restoredRunRef = useRef("");
     const watchingRunIdsRef = useRef(new Set<string>());
+    const workspaceActionControllerRef = useRef<WorkspaceAgentActionController | null>(null);
+    const executeWorkspaceActionsRef = useRef(onExecuteWorkspaceActions);
     const sessionsKey = useMemo(() => JSON.stringify(sessions), [sessions]);
     const localSessionsKey = useMemo(() => JSON.stringify(localSessions), [localSessions]);
 
@@ -111,6 +123,10 @@ export function CanvasAssistantPanel({
     useEffect(() => {
         snapshotRef.current = snapshot;
     }, [snapshot]);
+
+    useEffect(() => {
+        executeWorkspaceActionsRef.current = onExecuteWorkspaceActions;
+    }, [onExecuteWorkspaceActions]);
 
     useEffect(() => {
         if (localActiveSessionId === activeSessionId && localSessionsKey === sessionsKey) return;
@@ -225,30 +241,27 @@ export function CanvasAssistantPanel({
         setRunStage({ key: "planning", text: "正在理解你的需求" });
         setIsRunning(true);
         try {
-            const response = await fetch("/api/agent/runs", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
+            const created = await agentRunController.create(
+                () => ({
                     clientRequestId: nanoid(),
                     surface: "canvas",
                     conversationId,
                     projectId: snapshotRef.current.projectId,
                     prompt: text,
-                    snapshot: { ...runSnapshot, selectedNodeIds: canvasRunSelectedNodeIds(snapshotRef.current, submittedReferenceIds) },
+                    snapshot: { ...compactSnapshot(snapshotRef.current), selectedNodeIds: canvasRunSelectedNodeIds(snapshotRef.current, submittedReferenceIds) },
                     assetIds: [],
                     skillIds: selectedSkillId ? [selectedSkillId] : [],
                     modelIds: smartPlanning ? [] : selectedModelIds,
                     agentModelId: selectedAgentModelId || undefined,
                 }),
-            });
-            const payload = await response.json();
-            if (!response.ok) throw new Error(payload.msg || "创建 Agent 任务失败");
-            if (payload.data.run.conversationId && payload.data.run.conversationId !== conversationId) onConversationChange(payload.data.run.conversationId);
-            restoredRunRef.current = payload.data.run.id;
-            setActiveRunId(payload.data.run.id);
+                onPrepareRun,
+            );
+            if (created.run.conversationId && created.run.conversationId !== conversationId) onConversationChange(created.run.conversationId);
+            restoredRunRef.current = created.run.id;
+            setActiveRunId(created.run.id);
             setSelectedSkillId(undefined);
             setRunPaused(false);
-            await waitForBackendAgent(payload.data.run.id, session.id, assistantId);
+            await waitForBackendAgent(created.run.id, session.id, assistantId);
         } catch (error) {
             upsertMessage(session.id, { id: assistantId, role: "error", title: "Agent 执行失败", text: friendlyAgentError(error) });
             setIsRunning(false);
@@ -257,6 +270,13 @@ export function CanvasAssistantPanel({
 
     const waitForBackendAgent = async (runId: string, sessionId: string, assistantId: string, retryTaskId?: string, replaceFirstFailure = false) => {
         await withCanvasAgentRunWatch(watchingRunIdsRef.current, runId, async () => {
+            const actionController = createWorkspaceAgentActionController({
+                runId,
+                execute: (request) => executeWorkspaceActionsRef.current(request),
+                onStateChange: setWorkspaceActionState,
+            });
+            workspaceActionControllerRef.current = actionController;
+            setWorkspaceActionState({ status: "idle" });
             try {
                 await watchCanvasAgentRun(runId, {
                     onPlan: (ops, reply) => {
@@ -276,8 +296,13 @@ export function CanvasAssistantPanel({
                     onStage: setRunStage,
                     onPaused: setRunPaused,
                     onOps: onApplyOps,
+                    onWorkspaceActionRequest: (event) => void actionController.receive(event.request),
+                    onWorkspaceActionConfirmed: (request) => void actionController.receive(request),
+                    onWorkspaceActionRejected: (event) => actionController.receiveRejected(event),
+                    onWorkspaceActionReceipt: (event) => actionController.receiveReceipt(event.request, event.receipt, event.message),
                 });
             } finally {
+                if (workspaceActionControllerRef.current === actionController) workspaceActionControllerRef.current = null;
                 await refreshUserPointsIfSystem("system");
                 setIsRunning(false);
                 setActiveRunId("");
@@ -290,25 +315,22 @@ export function CanvasAssistantPanel({
         const projectId = snapshot.projectId;
         if (!projectId || activeRunId || restoredRunRef.current) return;
         let cancelled = false;
-        void fetch(`/api/agent/runs?projectId=${encodeURIComponent(projectId)}`, { cache: "no-store" })
-            .then((response) => (response.ok ? response.json() : null))
-            .then((payload) => {
-                if (cancelled) return;
-                const run = (payload?.data?.runs || []).find((item: { status?: string }) => ["planning", "running", "paused"].includes(item.status || ""));
-                if (!run?.id || restoredRunRef.current === run.id) return;
-                restoredRunRef.current = run.id;
-                const session = activeSession || createSession();
-                if (!activeSession) {
-                    setLocalSessions([session]);
-                    setLocalActiveSessionId(session.id);
-                }
-                const assistantId = nanoid();
-                appendMessage(session.id, { id: assistantId, role: "assistant", text: "已恢复刷新前仍在执行的 Agent 任务。" });
-                setActiveRunId(run.id);
-                setRunPaused(run.status === "paused");
-                setIsRunning(true);
-                void waitForBackendAgent(run.id, session.id, assistantId).catch((error) => appendMessage(session.id, { id: nanoid(), role: "error", title: "恢复失败", text: friendlyAgentError(error, "Agent 任务恢复失败，请稍后重试。") }));
-            });
+        void agentRunController.restore({ surface: "canvas", projectId }).then((run) => {
+            if (cancelled) return;
+            if (!run?.id || restoredRunRef.current === run.id) return;
+            restoredRunRef.current = run.id;
+            const session = activeSession || createSession();
+            if (!activeSession) {
+                setLocalSessions([session]);
+                setLocalActiveSessionId(session.id);
+            }
+            const assistantId = nanoid();
+            appendMessage(session.id, { id: assistantId, role: "assistant", text: "已恢复刷新前仍在执行的 Agent 任务。" });
+            setActiveRunId(run.id);
+            setRunPaused(run.status === "paused");
+            setIsRunning(true);
+            void waitForBackendAgent(run.id, session.id, assistantId).catch((error) => appendMessage(session.id, { id: nanoid(), role: "error", title: "恢复失败", text: friendlyAgentError(error, "Agent 任务恢复失败，请稍后重试。") }));
+        });
         return () => {
             cancelled = true;
         };
@@ -324,9 +346,7 @@ export function CanvasAssistantPanel({
     const controlRun = async (action: "pause" | "resume" | "cancel") => {
         if (!activeRunId) return;
         try {
-            const response = await fetch(`/api/agent/runs/${encodeURIComponent(activeRunId)}/${action}`, { method: "POST" });
-            const payload = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(payload.msg || "Agent 任务控制失败");
+            await agentRunController.control(activeRunId, action);
             if (action === "pause") setRunPaused(true);
             if (action === "resume") setRunPaused(false);
             if (action === "cancel") setRunPaused(false);
@@ -345,9 +365,7 @@ export function CanvasAssistantPanel({
         setRunStage({ key: "executing", text: "正在重新执行失败任务" });
         upsertMessage(session.id, { id: assistantId, role: "assistant", title: undefined, text: "正在重新执行失败任务…", detail: undefined });
         try {
-            const response = await fetch(taskId ? `/api/agent/runs/${encodeURIComponent(runId)}/tasks/${encodeURIComponent(taskId)}/retry` : `/api/agent/runs/${encodeURIComponent(runId)}/retry`, { method: "POST" });
-            const payload = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(payload.msg || "任务重试失败");
+            await agentRunController.retry(runId, taskId);
             await waitForBackendAgent(runId, session.id, assistantId, taskId, !taskId);
         } catch (error) {
             upsertMessage(session.id, { id: assistantId, role: "error", title: "重试失败", text: friendlyAgentError(error, "任务重试失败，请稍后再试。"), detail: { runId, taskId } });
@@ -468,6 +486,18 @@ export function CanvasAssistantPanel({
                             {isRunning ? (
                                 <>
                                     <AgentWorkingMessage theme={theme} stage={runStage} />
+                                    <WorkspaceAgentActionCard
+                                        state={workspaceActionState}
+                                        onConfirm={() => {
+                                            void workspaceActionControllerRef.current?.confirm();
+                                        }}
+                                        onReject={() => {
+                                            void workspaceActionControllerRef.current?.reject();
+                                        }}
+                                        onRetry={() => {
+                                            void workspaceActionControllerRef.current?.retry();
+                                        }}
+                                    />
                                     <div className="flex justify-end gap-2">
                                         <Button size="small" icon={runPaused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />} onClick={() => void controlRun(runPaused ? "resume" : "pause")}>
                                             {runPaused ? "继续" : "暂停"}
@@ -606,6 +636,30 @@ export function CanvasAssistantPanel({
             </Modal>
         </>
     );
+
+    if (hosted) {
+        return (
+            <section className="canvas-agent-panel-hosted flex h-full min-h-0 w-full flex-col" style={{ background: theme.node.panel, color: theme.node.text }} data-canvas-agent-hosted>
+                <header className="flex h-14 shrink-0 items-center justify-between border-b px-4" style={{ borderColor: theme.node.stroke }}>
+                    <div className="flex min-w-0 items-center gap-2">
+                        <span className="grid size-8 place-items-center rounded-lg">
+                            <SiteLogo logoUrl="/logo.svg" className="size-7" />
+                        </span>
+                        <div className="min-w-0">
+                            <div className="text-base font-semibold leading-5">Agent</div>
+                            <div className="truncate text-xs" style={{ color: theme.node.muted }}>
+                                画布助手
+                            </div>
+                        </div>
+                    </div>
+                    <Tooltip title="收起对话">
+                        <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" style={iconButtonStyle} icon={<PanelRightClose className="size-4" />} onClick={collapse} aria-label="收起 Agent" />
+                    </Tooltip>
+                </header>
+                {onlineContent}
+            </section>
+        );
+    }
 
     return (
         <motion.div

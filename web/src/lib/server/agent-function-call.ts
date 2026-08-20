@@ -3,7 +3,12 @@ import { validateAgentPlan, type AgentPlan } from "./agent-run-validation";
 
 export type AgentFunctionCallResult = { arguments: string; pointsCost?: number; pointsRemaining?: number; pointsRecordId?: string };
 
-export async function parseAgentPlanCall(call: AgentFunctionCallResult, onInvalid: () => Promise<unknown>, conversationFallback?: { objective: string; reply?: string }, options?: { allowProjectHandoff?: boolean }): Promise<AgentPlan> {
+export async function parseAgentPlanCall(
+    call: AgentFunctionCallResult,
+    onInvalid: () => Promise<unknown>,
+    conversationFallback?: { objective: string; reply?: string },
+    options?: { allowProjectHandoff?: boolean; allowWorkspaceActions?: boolean },
+): Promise<AgentPlan> {
     try {
         const raw = parsePlanArguments(call.arguments, conversationFallback);
         const conversation = Boolean(conversationFallback) || raw.intent === "conversation";
@@ -11,6 +16,7 @@ export async function parseAgentPlanCall(call: AgentFunctionCallResult, onInvali
         const plan: unknown = {
             ...raw,
             ...(options?.allowProjectHandoff === false ? { projectHandoff: undefined } : {}),
+            ...(options?.allowWorkspaceActions === false ? { workspaceActions: undefined } : {}),
             ...(conversation
                 ? {
                       intent: "conversation",
@@ -19,6 +25,7 @@ export async function parseAgentPlanCall(call: AgentFunctionCallResult, onInvali
                       decisions: [],
                       deliverables: [],
                       projectHandoff: undefined,
+                      workspaceActions: undefined,
                   }
                 : {}),
             foundation: normalizeCreativeFoundation(raw.foundation, objective),

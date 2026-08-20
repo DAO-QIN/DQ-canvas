@@ -1,4 +1,4 @@
-import { BookMarked, Clapperboard, Compass, FileText, GalleryVerticalEnd, ImagePlus, Images, Maximize2, Sparkles, UserRound, Video } from "lucide-react";
+import { BookMarked, Clapperboard, Compass, FileText, GalleryVerticalEnd, ImagePlus, Images, Maximize2, PanelsTopLeft, Sparkles, UserRound, Video } from "lucide-react";
 
 export const navigationGroups = [
     { id: "create", label: "创作" },
@@ -23,6 +23,13 @@ export const navigationTools = [
         group: "create",
         icon: Sparkles,
         primary: true,
+    },
+    {
+        slug: "design",
+        label: "我的画板",
+        description: "商品图与视觉排版",
+        group: "projects",
+        icon: PanelsTopLeft,
     },
     {
         slug: "canvas",

@@ -58,7 +58,8 @@ test("installation rejects a wrong token and creates the first administrator onc
     await page.goto("/install");
     await expect(page).toHaveURL(/\/(?:$|\?)/);
 
-    const statePath = path.join(process.cwd(), ".e2e-data", "admin-state.json");
+    const e2eDataDir = path.resolve(process.cwd(), process.env.DQ_E2E_DATA_DIR?.trim() || ".e2e-data");
+    const statePath = path.join(e2eDataDir, "admin-state.json");
     await mkdir(path.dirname(statePath), { recursive: true });
     await request.storageState({ path: statePath });
 });

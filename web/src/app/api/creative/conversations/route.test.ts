@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
     getCurrentUser: vi.fn(),
+    listConversationsForUser: vi.fn(),
     listWorkbenchSessionsForUser: vi.fn(),
 }));
 
@@ -16,7 +17,7 @@ vi.mock("@/lib/server/creative-runtime-service", () => ({
             super(message);
         }
     },
-    listConversationsForUser: vi.fn(),
+    listConversationsForUser: mocks.listConversationsForUser,
     listWorkbenchSessionsForUser: mocks.listWorkbenchSessionsForUser,
 }));
 
@@ -26,6 +27,7 @@ describe("creative workbench conversation summaries route", () => {
     beforeEach(() => {
         vi.clearAllMocks();
         mocks.getCurrentUser.mockResolvedValue({ id: "user-one" });
+        mocks.listConversationsForUser.mockResolvedValue([]);
         mocks.listWorkbenchSessionsForUser.mockResolvedValue([
             { id: "one", title: "一", lastPrompt: "一", searchText: "一", updatedAt: 2 },
             { id: "two", title: "二", lastPrompt: "二", searchText: "二", updatedAt: 1 },
@@ -46,5 +48,11 @@ describe("creative workbench conversation summaries route", () => {
         const response = await GET(new Request("http://localhost/api/creative/conversations?view=workbench&workspace=image"));
         expect(response.status).toBe(401);
         expect(mocks.listWorkbenchSessionsForUser).not.toHaveBeenCalled();
+    });
+
+    it("forwards the project boundary for Design conversation history", async () => {
+        await GET(new Request("http://localhost/api/creative/conversations?surface=design&source=design&projectId=design-one&status=active&limit=20"));
+
+        expect(mocks.listConversationsForUser).toHaveBeenCalledWith("user-one", expect.objectContaining({ surface: "design", source: "design", projectId: "design-one", status: "active" }));
     });
 });

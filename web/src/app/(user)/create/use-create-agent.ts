@@ -15,6 +15,7 @@ import {
     listCreativeConversationPage,
     listCreativeMessages,
     retryCreativeAgentTask,
+    referenceCreativeAsset as referenceCreativeAssetApi,
     updateCreativeConversation,
     uploadCreativeAsset,
     watchCreativeAgentRun,
@@ -242,6 +243,17 @@ export function useCreateAgent() {
             }
         },
         [ensureConversation, uploading],
+    );
+
+    const referenceExistingAsset = useCallback(
+        async (input: { id: string; type: "image" | "video" | "audio"; url: string; mimeType?: string; title?: string }) => {
+            const conversation = await ensureConversation();
+            const asset = await referenceCreativeAssetApi(conversation, input);
+            setAssets((current) => uniqueAssets([...current, asset]));
+            setSelectedAssetIds((current) => Array.from(new Set([...current, asset.id])).slice(-20));
+            return asset;
+        },
+        [ensureConversation],
     );
 
     const watchRun = useCallback(
@@ -508,7 +520,9 @@ export function useCreateAgent() {
         toggleAsset: (id: string) => setSelectedAssetIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id].slice(-20))),
         uploading,
         uploadAttachments,
+        referenceExistingAsset,
         removeAttachment: (id: string) => setSelectedAssetIds((current) => current.filter((item) => item !== id)),
+        clearAttachments: () => setSelectedAssetIds([]),
         restoreAttachments: (ids: string[]) => setSelectedAssetIds(Array.from(new Set(ids.filter((id) => assets.some((asset) => asset.id === id)))).slice(-20)),
     };
 }

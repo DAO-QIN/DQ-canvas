@@ -1,0 +1,353 @@
+.workbench {
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.surface {
+    isolation: isolate;
+}
+
+.chromeButton,
+.titleButton,
+.titleInput,
+.performanceSelect,
+.railContent {
+    color: inherit;
+}
+
+.chromeButton {
+    display: inline-grid;
+    width: 38px;
+    height: 38px;
+    flex: 0 0 38px;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: 12px;
+    outline: none;
+    background: transparent;
+    cursor: pointer;
+}
+
+.chromeButton:hover:not(:disabled),
+.chromeButtonActive {
+    color: var(--creative-workspace-active-foreground);
+    background: var(--creative-workspace-active);
+}
+
+.chromeButton:focus-visible,
+.titleButton:focus-visible,
+.titleInput:focus-visible,
+.performanceSelect:focus-visible {
+    outline: 2px solid var(--creative-workspace-focus);
+    outline-offset: 2px;
+}
+
+.chromeButton:disabled {
+    cursor: not-allowed;
+    opacity: 0.35;
+}
+
+.dangerButton {
+    color: var(--creative-workspace-danger);
+}
+
+.topActions,
+.titleEditor,
+.zoomTrailing {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 4px;
+}
+
+.zoomRange {
+    width: 84px;
+    accent-color: var(--creative-workspace-active);
+}
+
+.menuWrap {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+}
+
+.menuWrap:focus-within {
+    z-index: 1200;
+}
+
+.projectMenu,
+.createMenu,
+.appearanceMenu,
+.shortcutsMenu {
+    position: absolute;
+    z-index: 1200;
+    box-sizing: border-box;
+    padding: 8px;
+    color: var(--creative-workspace-foreground);
+    border: 1px solid var(--creative-workspace-panel-border);
+    border-radius: 14px;
+    background: var(--creative-workspace-panel);
+    box-shadow: var(--creative-workspace-panel-shadow);
+    backdrop-filter: blur(18px);
+}
+
+.projectMenu {
+    top: calc(100% + 10px);
+    left: 0;
+    width: 210px;
+}
+
+.createMenu,
+.appearanceMenu {
+    bottom: calc(100% + 10px);
+}
+
+.createMenu {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+}
+
+.appearanceMenu {
+    right: 0;
+    width: 240px;
+}
+
+.shortcutsMenu {
+    bottom: calc(100% + 10px);
+    left: 0;
+    width: min(420px, calc(100vw - 24px));
+}
+
+.projectMenu button,
+.createMenu button,
+.appearanceMenu button,
+.appearanceMenu label,
+.shortcutsMenu > div {
+    display: flex;
+    min-height: 36px;
+    align-items: center;
+    gap: 8px;
+    box-sizing: border-box;
+}
+
+.projectMenu button,
+.createMenu button,
+.appearanceMenu button {
+    width: 100%;
+    padding: 7px 9px;
+    color: inherit;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+}
+
+.projectMenu button:hover,
+.createMenu button:hover:not(:disabled),
+.appearanceMenu button:hover {
+    background: var(--creative-workspace-control-hover);
+}
+
+.projectMenu svg,
+.createMenu svg,
+.appearanceMenu svg {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+}
+
+.createMenu button:disabled {
+    cursor: not-allowed;
+    opacity: 0.35;
+}
+
+.appearanceMenu fieldset {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    padding: 0;
+    border: 0;
+}
+
+.appearanceMenu legend {
+    grid-column: 1 / -1;
+    padding: 4px 2px;
+    color: var(--creative-workspace-muted);
+    font-size: 11px;
+}
+
+.appearanceMenu label {
+    justify-content: space-between;
+    padding: 4px;
+    font-size: 12px;
+}
+
+.appearanceMenu select {
+    color: inherit;
+    border: 1px solid var(--creative-workspace-panel-border);
+    border-radius: 8px;
+    background: var(--creative-workspace-panel);
+}
+
+.shortcutsMenu > strong {
+    display: block;
+    padding: 4px 6px 8px;
+}
+
+.shortcutsMenu > div {
+    justify-content: space-between;
+    padding: 3px 6px;
+    color: var(--creative-workspace-muted);
+    font-size: 12px;
+}
+
+.shortcutsMenu kbd {
+    color: var(--creative-workspace-foreground);
+}
+
+.menuDanger {
+    color: var(--creative-workspace-danger) !important;
+}
+
+.titleButton,
+.titleInput {
+    width: min(320px, 32vw);
+    min-width: 0;
+    padding: 2px 4px;
+    overflow: hidden;
+    border: 0;
+    border-bottom: 1px dashed transparent;
+    outline: none;
+    background: transparent;
+    font: inherit;
+    font-weight: 650;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.titleButton {
+    cursor: text;
+}
+
+.titleButton:hover {
+    border-bottom-color: currentColor;
+}
+
+.performanceSelect {
+    height: 34px;
+    max-width: 116px;
+    border: 1px solid var(--creative-workspace-panel-border);
+    border-radius: 10px;
+    outline: none;
+    background: var(--creative-workspace-panel);
+    font-size: 12px;
+}
+
+.railContent {
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+}
+
+.railContent > * {
+    width: 100% !important;
+    max-width: none !important;
+    height: 100% !important;
+    margin: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+}
+
+.railContent :global(.canvas-agent-panel-frame) {
+    width: 100% !important;
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+}
+
+.railContent :global(.canvas-agent-panel) {
+    width: 100% !important;
+    transform: none !important;
+    transition: none !important;
+}
+
+.railContent :global(.canvas-agent-resize-handle) {
+    display: none !important;
+}
+
+.zoomTrailing {
+    padding-left: 3px;
+    border-left: 1px solid var(--creative-workspace-panel-border);
+}
+
+/*
+ * Canvas has a wider creation/action dock than Design. Between the compact
+ * breakpoint and a full desktop pane, keep zoom controls on their own row.
+ */
+@media (min-width: 521px) and (max-width: 1500px) {
+    .workbench {
+        --workspace-generation-composer-bottom: 128px;
+    }
+
+    .canvasZoomDock {
+        transform: translateY(-64px);
+    }
+}
+
+.compactOnly {
+    display: none;
+}
+
+@media (max-width: 860px) {
+    .railContent > * {
+        min-width: 0 !important;
+    }
+}
+
+@media (max-width: 720px) {
+    .wideOnly,
+    .performanceSelect {
+        display: none;
+    }
+
+    .compactOnly {
+        display: inline-grid;
+    }
+
+    .titleButton,
+    .titleInput {
+        width: min(190px, 34vw);
+    }
+}
+
+@media (max-width: 520px) {
+    .chromeButton {
+        width: 32px;
+        height: 32px;
+        flex-basis: 32px;
+        border-radius: 10px;
+    }
+
+    .titleButton,
+    .titleInput {
+        width: min(132px, 31vw);
+    }
+
+    .zoomTrailing {
+        display: none;
+    }
+
+    .projectMenu {
+        left: -2px;
+        width: min(210px, calc(100vw - 32px));
+    }
+}

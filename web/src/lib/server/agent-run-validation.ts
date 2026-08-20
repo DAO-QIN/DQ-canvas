@@ -1,6 +1,13 @@
 import type { CreativeFoundation } from "@/lib/creative-agent-contract";
 import type { CreativeProjectHandoffPlan } from "@/lib/creative-runtime-contract";
 
+export type AgentWorkspaceActionProposal = {
+    command: string;
+    label: string;
+    targetIds?: string[];
+    parameters?: Record<string, unknown>;
+};
+
 export type AgentPlan = {
     intent?: "conversation" | "generation";
     objective: string;
@@ -11,6 +18,7 @@ export type AgentPlan = {
     foundation: CreativeFoundation;
     brand?: { summary?: string; colors?: string[]; visualKeywords?: string[] };
     projectHandoff?: CreativeProjectHandoffPlan;
+    workspaceActions?: AgentWorkspaceActionProposal[];
     deliverables: Array<{
         id?: string;
         targetNodeId?: string;
@@ -32,12 +40,13 @@ export type AgentPlan = {
 export function validateAgentPlan(value: unknown): asserts value is AgentPlan {
     const plan = value as AgentPlan;
     if (!plan?.objective?.trim() || !Array.isArray(plan.deliverables) || plan.deliverables.length > 50) throw new Error("模型返回的创作计划无效");
+    validateWorkspaceActionProposals(plan.workspaceActions);
     if (plan.skillIds !== undefined && (!Array.isArray(plan.skillIds) || plan.skillIds.length > 6 || plan.skillIds.some((id) => typeof id !== "string" || !id.trim()))) throw new Error("模型返回的技能选择无效");
     if (plan.intent === "conversation") {
-        if (!plan.reply?.trim() || plan.deliverables.length || plan.projectHandoff) throw new Error("模型返回的对话结果无效");
+        if (!plan.reply?.trim() || plan.deliverables.length || plan.projectHandoff || plan.workspaceActions?.length) throw new Error("模型返回的对话结果无效");
         return;
     }
-    if (!plan.deliverables.length && !plan.projectHandoff) throw new Error("模型返回的创作计划无效");
+    if (!plan.deliverables.length && !plan.projectHandoff && !plan.workspaceActions?.length) throw new Error("模型返回的创作计划无效");
     if (
         plan.projectHandoff &&
         (!["canvas", "drama"].includes(plan.projectHandoff.surface) ||
@@ -59,6 +68,21 @@ export function validateAgentPlan(value: unknown): asserts value is AgentPlan {
     if (plan.decisions && (!Array.isArray(plan.decisions) || plan.decisions.length > 8 || plan.decisions.some((item) => !item?.label?.trim() || !item?.value?.trim() || !item?.reason?.trim()))) throw new Error("模型返回的决策摘要无效");
     const ids = new Set(plan.deliverables.map((item, index) => item.id?.trim() || `task-${index}`));
     if (ids.size !== plan.deliverables.length || plan.deliverables.some((item) => item.dependencies?.some((dependency) => !ids.has(dependency)))) throw new Error("模型返回的任务依赖无效");
+}
+
+function validateWorkspaceActionProposals(value: unknown) {
+    if (value === undefined) return;
+    if (!Array.isArray(value) || value.length > 100) throw new Error("模型返回的工作台动作无效");
+    const allowedKeys = new Set(["command", "label", "targetIds", "parameters"]);
+    for (const item of value) {
+        if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("模型返回的工作台动作无效");
+        const proposal = item as Record<string, unknown>;
+        if (Object.keys(proposal).some((key) => !allowedKeys.has(key))) throw new Error("模型返回的工作台动作包含不受信任字段");
+        if (typeof proposal.command !== "string" || !proposal.command.trim() || proposal.command.trim().length > 120 || typeof proposal.label !== "string" || !proposal.label.trim() || proposal.label.trim().length > 400)
+            throw new Error("模型返回的工作台动作无效");
+        if (proposal.targetIds !== undefined && (!Array.isArray(proposal.targetIds) || proposal.targetIds.length > 500 || proposal.targetIds.some((id) => typeof id !== "string" || !id.trim()))) throw new Error("模型返回的工作台动作目标无效");
+        if (proposal.parameters !== undefined && (!proposal.parameters || typeof proposal.parameters !== "object" || Array.isArray(proposal.parameters) || Object.keys(proposal.parameters).length > 30)) throw new Error("模型返回的工作台动作参数无效");
+    }
 }
 
 export function validateAgentTaskResult(type: AgentPlan["deliverables"][number]["type"], value: unknown) {

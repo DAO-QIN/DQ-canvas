@@ -26,6 +26,10 @@ export type BackgroundRemovalTask = GenerationTaskContext & {
     operation: "remove-background";
     sourceStorageKey: string;
     sourceNodeId?: string;
+    sourceIdentity?: string;
+    sourceElementId?: string;
+    sourceAssetVersionId?: string;
+    sourceLocator?: unknown;
     sourceMimeType: string;
     sourceBytes: number;
     sourceWidth: number;
@@ -104,6 +108,10 @@ export function publicBackgroundRemovalTask(task: BackgroundRemovalTask) {
         stage: progress.label,
         sourceStorageKey: task.sourceStorageKey,
         sourceNodeId: task.sourceNodeId,
+        sourceIdentity: task.sourceIdentity,
+        sourceElementId: task.sourceElementId,
+        sourceAssetVersionId: task.sourceAssetVersionId,
+        sourceLocator: task.sourceLocator,
         sourceMimeType: task.sourceMimeType,
         sourceBytes: task.sourceBytes,
         sourceWidth: task.sourceWidth,

@@ -1,19 +1,21 @@
-import { isCanvasImageNodeType, type CanvasNodeData } from "../types";
+import { isCanvasImageNodeType, type CanvasDerivedImageOperation, type CanvasNodeData } from "../types";
+import { canvasDerivedImageSourceFingerprint } from "../utils/canvas-derived-image";
 
 export type CanvasDerivedImageRequestTicket = {
     key: string;
     token: symbol;
     projectId: string;
+    operation: CanvasDerivedImageOperation;
     sourceNodeId: string;
     sourceFingerprint: string;
 };
 
-export function beginCanvasDerivedImageRequest(requests: Map<string, symbol>, projectId: string, operation: string, sourceNode: CanvasNodeData): CanvasDerivedImageRequestTicket | null {
+export function beginCanvasDerivedImageRequest(requests: Map<string, symbol>, projectId: string, operation: CanvasDerivedImageOperation, sourceNode: CanvasNodeData): CanvasDerivedImageRequestTicket | null {
     const key = `${projectId}:${operation}:${sourceNode.id}`;
     if (requests.has(key)) return null;
     const token = Symbol(key);
     requests.set(key, token);
-    return { key, token, projectId, sourceNodeId: sourceNode.id, sourceFingerprint: canvasDerivedImageSourceFingerprint(sourceNode) };
+    return { key, token, projectId, operation, sourceNodeId: sourceNode.id, sourceFingerprint: canvasDerivedImageSourceFingerprint(sourceNode) };
 }
 
 export function currentCanvasDerivedImageSource(requests: Map<string, symbol>, ticket: CanvasDerivedImageRequestTicket, currentProjectId: string, nodes: readonly CanvasNodeData[]) {
@@ -25,8 +27,4 @@ export function currentCanvasDerivedImageSource(requests: Map<string, symbol>, t
 
 export function finishCanvasDerivedImageRequest(requests: Map<string, symbol>, ticket: CanvasDerivedImageRequestTicket) {
     if (requests.get(ticket.key) === ticket.token) requests.delete(ticket.key);
-}
-
-function canvasDerivedImageSourceFingerprint(node: CanvasNodeData) {
-    return JSON.stringify([node.metadata?.content?.trim() || "", node.metadata?.storageKey?.trim() || ""]);
 }

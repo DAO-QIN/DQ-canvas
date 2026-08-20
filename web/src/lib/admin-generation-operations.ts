@@ -1,3 +1,4 @@
+import type { CreativeSurface } from "@/lib/creative-runtime-contract";
 import type { GenerationTaskType } from "@/lib/server/generation-task-store";
 import type { GenerationAttempt } from "@/lib/server/generation-attempt";
 import type { GenerationTaskExecutionPhase } from "@/lib/server/generation-task-scheduler";
@@ -10,7 +11,7 @@ export type AdminGenerationTask = {
     displayName: string;
     type: GenerationTaskType;
     status: "pending" | "running" | "success" | "error" | "paused" | "cancelled";
-    surface?: "chat" | "canvas" | "drama";
+    surface?: CreativeSurface;
     conversationId?: string;
     runId?: string;
     projectId?: string;

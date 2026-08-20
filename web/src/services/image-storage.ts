@@ -19,8 +19,15 @@ export type UploadedImage = {
 export async function uploadImage(input: string | Blob, options: { maxBytes?: number; purpose?: ServerMediaUploadOptions["purpose"] } = {}): Promise<UploadedImage> {
     const maxBytes = options.maxBytes ?? CREATIVE_UPLOAD_MAX_BYTES;
     const stored = await uploadServerMedia(input, "image", maxBytes, options);
-    const meta = await readImageMeta(stored.url);
+    const meta = await readImageMeta(await authoritativeImageSource(input, stored.storageKey, stored.url));
     return { ...stored, serverUrl: stored.url, width: meta.width, height: meta.height, mimeType: stored.mimeType || meta.mimeType };
+}
+
+async function authoritativeImageSource(input: string | Blob, storageKey: string, storedUrl: string) {
+    if (input instanceof Blob) return blobToDataUrl(input);
+    if (/^(?:data:|blob:)/i.test(input)) return input;
+    const original = await getServerMediaBlob(storageKey, storedUrl);
+    return original ? blobToDataUrl(original) : input;
 }
 
 export async function resolveImageUrl(storageKey?: string, fallback = "") {

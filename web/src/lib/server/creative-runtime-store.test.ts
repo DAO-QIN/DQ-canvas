@@ -293,6 +293,13 @@ describe("creative runtime file provider", () => {
         expect(await listCreativeConversations("user", { surface: "chat", source: "agent", limit: 1 })).toEqual([agent]);
     });
 
+    it("keeps project conversations isolated before applying pagination", async () => {
+        const first = await createCreativeConversation("user", { surface: "design", source: "design", projectId: "design-one", title: "First" });
+        await createCreativeConversation("user", { surface: "design", source: "design", projectId: "design-two", title: "Second" });
+
+        expect(await listCreativeConversations("user", { surface: "design", source: "design", projectId: "design-one", limit: 1 })).toEqual([first]);
+    });
+
     it("loads the newest page first and can page backward through long conversations", async () => {
         const now = Date.now();
         mocks.files.set("creative-runtime.json", {

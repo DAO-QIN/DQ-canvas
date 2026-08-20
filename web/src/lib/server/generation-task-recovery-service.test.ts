@@ -94,6 +94,18 @@ describe("generation task recovery service", () => {
         expect(result).toMatchObject({ claimed: 1, failed: 1 });
     });
 
+    it("quarantines an Agent awaiting workspace confirmation without executing it", async () => {
+        const run = { id: "agent-one", userId: "user-one", status: "awaiting_confirmation", tasks: [], createdAt: 1_000 };
+        mocks.claim.mockResolvedValue([lease()]);
+        mocks.getAgentRun.mockResolvedValue(run);
+
+        const result = await runGenerationTaskRecoveryBatch({ origin: "http://internal", workerId: "worker-one" });
+
+        expect(mocks.executeAgentRun).not.toHaveBeenCalled();
+        expect(mocks.release).toHaveBeenCalledWith("agent", "agent-one", "worker-one", { executionPhase: "awaiting_confirmation", nextPollAt: undefined, lastUpstreamStatus: "awaiting_confirmation" });
+        expect(result).toMatchObject({ claimed: 1, pending: 1, failed: 0 });
+    });
+
     it("runs a completed Agent review from its persistent review lease", async () => {
         const run = { id: "agent-one", userId: "user-one", status: "completed", reviewed: false, reviewStatus: "review_pending", tasks: [], createdAt: 1_000 };
         mocks.claim.mockResolvedValue([{ ...lease(), status: "success", executionPhase: "review_pending" }]);

@@ -1,5 +1,7 @@
 import { nanoid } from "nanoid";
 
+import type { CreativeSurface } from "@/lib/creative-runtime-contract";
+import type { SurfaceBinding } from "@/lib/creative-workspace/surface-binding";
 import { GenerationTaskNeedsReviewError, type GenerationTaskExecutionState } from "@/services/api/generation-task-state";
 import { GenerationTaskRequestError } from "@/services/api/generation-task-request-error";
 import { refreshUserPointsIfSystem, syncUserPointsFromHeaders } from "@/services/api/points";
@@ -15,7 +17,7 @@ type RequestOptions = {
     logTitle?: string;
     conversationId?: string;
     runId?: string;
-    surface?: "chat" | "canvas" | "drama";
+    surface?: CreativeSurface;
     projectId?: string;
     episodeId?: string;
     shotId?: string;
@@ -27,8 +29,10 @@ type RequestOptions = {
     generationSlotId?: string;
     sourceNodeId?: string;
     targetNodeId?: string;
+    binding?: SurfaceBinding;
     validateBeforeSubmit?: () => void;
     onTaskState?: (state: GenerationTaskExecutionState) => void;
+    skillIds?: string[];
 };
 
 export type ImageGenerationTask = {
@@ -93,6 +97,7 @@ export async function createImageGenerationTask(config: AiConfig, prompt: string
                 size: requestConfig.size,
             },
             prompt,
+            skillIds: options?.skillIds,
             references: taskReferences,
             mask: taskMask,
             source: options?.logSource || "image-workbench",
@@ -141,6 +146,7 @@ function taskContext(options?: RequestOptions) {
         generationSlotId: options.generationSlotId,
         sourceNodeId: options.sourceNodeId,
         targetNodeId: options.targetNodeId,
+        binding: options.binding,
     };
 }
 

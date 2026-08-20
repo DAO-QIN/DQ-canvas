@@ -106,4 +106,37 @@ describe("Agent child task retry concurrency", () => {
             },
         });
     });
+
+    it("keeps a stable Canvas locator when retrying from a shared snapshot", async () => {
+        const locator = { kind: "storage-key", storageKey: "permanent/current.webp" };
+        const run = {
+            id: "run",
+            userId: "user",
+            surface: "canvas",
+            status: "failed",
+            snapshot: {
+                schemaVersion: 1,
+                surface: "canvas",
+                projectId: "canvas-one",
+                title: "画布",
+                revision: 3,
+                selectionIds: ["reference"],
+                entities: [{ id: "reference", kind: "image", name: "当前参考图", bounds: { x: 0, y: 0, width: 360, height: 640 }, resource: locator }],
+                relations: [],
+                truncated: false,
+            },
+            tasks: [{ id: "task", title: "编辑图片", type: "image", prompt: "换成紫色毛发", count: 1, ratio: "原图比例", dependencies: [], status: "failed", attempts: 1, referenceLocator: locator, error: "尺寸无效" }],
+        };
+        mocks.countActive.mockResolvedValue(0);
+        mocks.getAgentRun.mockResolvedValue(run);
+        mocks.updateAgentRunById.mockImplementation(async (_id, patch) => ({ ...run, ...patch }));
+
+        const response = await POST(new Request("http://localhost/api/agent/runs/run/tasks/task/retry", { method: "POST" }), { params: Promise.resolve({ id: "run", taskId: "task" }) });
+
+        expect(response.status).toBe(200);
+        const [retried] = mocks.updateAgentRunById.mock.calls[0]?.[1]?.tasks;
+        expect(retried).toMatchObject({ status: "ready", targetNodeId: "reference", referenceLocator: locator, ratio: "9:16" });
+        expect(retried).not.toHaveProperty("referenceUrl");
+        expect(JSON.stringify(retried)).not.toMatch(/data:|blob:|reference-assets|signature/);
+    });
 });

@@ -1,6 +1,6 @@
 # DQ-绘图 文档索引
 
-DQ-绘图 是面向 Agent、图片、视频、Canvas 与短剧生产的 AI 创作工作台。当前仓库：`DAO-QIN/DQ-canvas`。
+DQ-绘图 是面向 Agent、图片、视频、Canvas、设计画板与短剧生产的 AI 创作工作台。当前仓库：`DAO-QIN/DQ-canvas`。
 
 ## 产品与安装
 
@@ -17,6 +17,8 @@ DQ-绘图 是面向 Agent、图片、视频、Canvas 与短剧生产的 AI 创�
 
 ## 创作与画布
 
+- [设计画板与共享工作台](/docs/progress/design-board)
+- [画板实施状态](progress/design-board/implementation-status.md)
 - [画布节点操作手册](/docs/canvas/canvas-node-manual)
 - [画布快捷键](/docs/canvas/canvas-shortcuts)
 - [第三方提示词来源说明](/docs/overview/third-party-prompt-repositories)

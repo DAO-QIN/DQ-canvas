@@ -1,10 +1,10 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 
 import { useCanvasStore } from "../stores/use-canvas-store";
-import { reconcileCanvasHistoryBackgroundRemovalTasks } from "../utils/canvas-active-task-binding";
+import { clearHandledCanvasBackgroundRemovalTaskMetadataFromNodes, reconcileCanvasHistoryBackgroundRemovalTasks } from "../utils/canvas-active-task-binding";
 
 const CanvasAssistantPanel = dynamic(() => import("../components/canvas-assistant-panel").then((mod) => mod.CanvasAssistantPanel), { ssr: false });
 const loadAssetPickerModal = () => import("../components/asset-picker-modal").then((mod) => mod.AssetPickerModal);
@@ -23,7 +23,10 @@ export function useCanvasNavigationActions({ state }: { state: CanvasPageState }
         lastHistoryRef,
         historyCommitTimerRef,
         applyingHistoryRef,
+        viewportSaveTimerRef,
         createProject,
+        updateProject,
+        flushProject,
         deleteProjects,
         nodes,
         setNodes,
@@ -44,9 +47,49 @@ export function useCanvasNavigationActions({ state }: { state: CanvasPageState }
         setShowImageInfo,
         setHistoryState,
         nodesRef,
+        connectionsRef,
         viewportRef,
         backgroundRemovalHandledTaskIdsRef,
     } = state;
+    const navigationInFlightRef = useRef<Promise<boolean> | null>(null);
+
+    const flushCurrentProject = useCallback(async () => {
+        if (viewportSaveTimerRef.current) {
+            clearTimeout(viewportSaveTimerRef.current);
+            viewportSaveTimerRef.current = null;
+        }
+        updateProject(projectId, {
+            nodes: clearHandledCanvasBackgroundRemovalTaskMetadataFromNodes(nodesRef.current),
+            connections: connectionsRef.current,
+            chatSessions,
+            activeChatId,
+            backgroundMode,
+            showImageInfo,
+            viewport: viewportRef.current,
+        });
+        await flushProject(projectId);
+    }, [activeChatId, backgroundMode, chatSessions, connectionsRef, flushProject, nodesRef, projectId, showImageInfo, updateProject, viewportRef, viewportSaveTimerRef]);
+
+    const navigateAfterFlush = useCallback(
+        (navigate: () => void | Promise<void>, fallbackMessage = "画布保存失败，已留在当前页面") => {
+            if (navigationInFlightRef.current) return navigationInFlightRef.current;
+            const operation = (async () => {
+                try {
+                    await flushCurrentProject();
+                    await navigate();
+                    return true;
+                } catch (error) {
+                    message.error(error instanceof Error ? error.message : fallbackMessage);
+                    return false;
+                }
+            })().finally(() => {
+                navigationInFlightRef.current = null;
+            });
+            navigationInFlightRef.current = operation;
+            return operation;
+        },
+        [flushCurrentProject, message],
+    );
 
     const resetViewport = useCallback(() => {
         setViewport({ x: size.width / 2, y: size.height / 2, k: 1 });
@@ -117,14 +160,18 @@ export function useCanvasNavigationActions({ state }: { state: CanvasPageState }
         applyHistory(next);
     }, [applyHistory]);
 
-    const createAndOpenProject = useCallback(async () => {
-        try {
-            const id = await createProject(`DQ-绘图 画布 ${useCanvasStore.getState().summaries.length + 1}`);
-            router.push(`/canvas/${id}`);
-        } catch (error) {
-            message.error(error instanceof Error ? error.message : "画布创建失败");
-        }
-    }, [createProject, message, router]);
+    const navigateToWorkbench = useCallback(() => navigateAfterFlush(() => router.push("/create")), [navigateAfterFlush, router]);
+
+    const navigateToProjects = useCallback(() => navigateAfterFlush(() => router.push("/canvas")), [navigateAfterFlush, router]);
+
+    const createAndOpenProject = useCallback(
+        () =>
+            navigateAfterFlush(async () => {
+                const id = await createProject(`DQ-绘图 画布 ${useCanvasStore.getState().summaries.length + 1}`);
+                router.push(`/canvas/${id}`);
+            }, "画布创建失败"),
+        [createProject, navigateAfterFlush, router],
+    );
 
     const deleteCurrentProject = useCallback(async () => {
         try {
@@ -141,6 +188,9 @@ export function useCanvasNavigationActions({ state }: { state: CanvasPageState }
         applyHistory,
         undoCanvas,
         redoCanvas,
+        flushCurrentProject,
+        navigateToWorkbench,
+        navigateToProjects,
         createAndOpenProject,
         deleteCurrentProject,
     };

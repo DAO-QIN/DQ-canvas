@@ -4,9 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowUp, AtSign, Boxes, FileText, ImageIcon, ImagePlus, Maximize2, Music2, Sparkles, Square, Video } from "lucide-react";
 import { Button, Modal } from "antd";
 
+import { WorkspaceGenerationComposer } from "@/components/creative-workspace";
 import { ModelPicker } from "@/components/model-picker";
 import { CreditSymbol, formatCreditAmount, requestCreditCost } from "@/constant/credits";
-import { defaultConfig, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useCreativeAgentOptions } from "@/hooks/use-creative-agent-options";
@@ -18,9 +19,9 @@ import { CanvasVideoSettingsPopover } from "./canvas-video-settings-popover";
 import { CanvasCameraControl } from "./canvas-camera-control";
 import { CanvasPortraitTexturePopover } from "./canvas-portrait-texture-popover";
 import { CanvasNodeType, isCanvasImageNodeType, type CanvasGenerationMode, type CanvasNodeData } from "../types";
+import { canvasComposerReference, canvasGenerationModeLabel, canvasGenerationPlaceholder, canvasNodeGenerationConfig, canvasNodeGenerationMode } from "./canvas-generation-composer-model";
 import { buildSkillResourceReferences, canvasResourceMentionToken, type CanvasResourceReference } from "../utils/canvas-resource-references";
-import { buildCanvasNodeConfig, canvasAudioConfigPatch, canvasVideoConfigPatch } from "../utils/canvas-node-config";
-import { PANORAMA_IMAGE_SIZE } from "../utils/canvas-panorama";
+import { canvasAudioConfigPatch, canvasVideoConfigPatch } from "../utils/canvas-node-config";
 
 export type CanvasNodeGenerationMode = CanvasGenerationMode;
 
@@ -33,14 +34,17 @@ type CanvasNodePromptPanelProps = {
     onStop: (nodeId: string) => void;
     mentionReferences?: CanvasResourceReference[];
     onImageSettingsOpenChange?: (open: boolean) => void;
+    variant?: "node" | "workspace";
+    onAddReferenceFiles?: (nodeId: string, files: File[]) => void | Promise<void>;
 };
 
-export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfigChange, onGenerate, onStop, mentionReferences = [], onImageSettingsOpenChange }: CanvasNodePromptPanelProps) {
+export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfigChange, onGenerate, onStop, mentionReferences = [], onImageSettingsOpenChange, variant = "node", onAddReferenceFiles }: CanvasNodePromptPanelProps) {
     const globalConfig = useEffectiveConfig();
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
-    const theme = canvasThemes[useThemeStore((state) => state.theme)];
-    const mode = defaultMode(node.type);
-    const config = buildNodeConfig(globalConfig, node, mode);
+    const colorTheme = useThemeStore((state) => state.theme);
+    const theme = canvasThemes[colorTheme];
+    const mode = canvasNodeGenerationMode(node.type);
+    const config = canvasNodeGenerationConfig(globalConfig, node, mode);
     const hasTextContent = node.type === CanvasNodeType.Text && Boolean(node.metadata?.content?.trim());
     const hasImageContent = isCanvasImageNodeType(node.type) && Boolean(node.metadata?.content);
     const isPanorama = node.type === CanvasNodeType.Panorama;
@@ -113,6 +117,159 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
         if (!text || isRunning) return;
         onGenerate(node.id, mode, text);
     };
+    const renderVideoControls = (className = "") => (
+        <div className={`relative flex min-w-0 items-center gap-1 ${className}`}>
+            <button type="button" className="inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-[10px]" style={{ background: theme.toolbar.itemHover }} onClick={() => setSkillOpen((open) => !open)}>
+                <Sparkles className="size-3" />
+                Skill
+            </button>
+            {skillOpen ? (
+                <div
+                    className="thin-scrollbar absolute bottom-9 left-0 z-[120] max-h-[min(280px,55vh)] w-64 max-w-[calc(100vw-24px)] overflow-y-auto rounded-lg border p-1 shadow-xl"
+                    style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border }}
+                >
+                    {skills.length ? (
+                        skills.map((skill) => {
+                            const selected = selectedSkillIds.has(skill.id);
+                            return (
+                                <button
+                                    key={skill.id}
+                                    type="button"
+                                    aria-pressed={selected}
+                                    className="flex w-full items-start gap-2 rounded-md px-2 py-2 text-left text-xs transition-colors hover:brightness-95"
+                                    style={{ color: selected ? theme.toolbar.activeText : theme.toolbar.item, background: selected ? theme.toolbar.activeBg : "transparent" }}
+                                    onClick={() => {
+                                        toggleSkill(skill.id);
+                                        setSkillOpen(false);
+                                    }}
+                                >
+                                    <Sparkles className="mt-0.5 size-3.5 shrink-0" />
+                                    <span className="min-w-0">
+                                        <span className="block truncate font-medium">{skill.name}</span>
+                                        <span className="block truncate opacity-60">{skill.description}</span>
+                                    </span>
+                                </button>
+                            );
+                        })
+                    ) : (
+                        <div className="px-2 py-2 text-xs opacity-60">暂无可用 Skill</div>
+                    )}
+                </div>
+            ) : null}
+            {frameOptions.length ? (
+                <>
+                    <select
+                        aria-label="视频起始帧"
+                        className="h-7 min-w-0 flex-1 rounded-full border bg-transparent px-2 text-[10px]"
+                        value={node.metadata?.videoStartFrameNodeId || ""}
+                        onChange={(event) => onConfigChange(node.id, { videoStartFrameNodeId: event.target.value || undefined })}
+                    >
+                        <option value="">起始帧</option>
+                        {frameOptions.map((item) => (
+                            <option key={item.nodeId} value={item.nodeId}>
+                                {item.label}
+                            </option>
+                        ))}
+                    </select>
+                    <select
+                        aria-label="视频结束帧"
+                        className="h-7 min-w-0 flex-1 rounded-full border bg-transparent px-2 text-[10px]"
+                        value={node.metadata?.videoEndFrameNodeId || ""}
+                        onChange={(event) => onConfigChange(node.id, { videoEndFrameNodeId: event.target.value || undefined })}
+                    >
+                        <option value="">结束帧</option>
+                        {frameOptions.map((item) => (
+                            <option key={item.nodeId} value={item.nodeId}>
+                                {item.label}
+                            </option>
+                        ))}
+                    </select>
+                </>
+            ) : null}
+        </div>
+    );
+
+    if (variant === "workspace") {
+        const composerReferences = connected.map(canvasComposerReference);
+        const sharedButtonClassName = "!h-8 !max-w-[190px] !min-w-0 !justify-start !rounded-full !px-2.5 !text-[11px] [&_svg]:!size-4";
+        const settingsControl =
+            mode === "image" ? (
+                <CanvasImageSettingsPopover
+                    config={config}
+                    placement="topLeft"
+                    buttonClassName={sharedButtonClassName}
+                    onConfigChange={(key, value) => onConfigChange(node.id, key === "count" ? { count: Number(value) || 1 } : { [key]: value })}
+                    onOpenChange={onImageSettingsOpenChange}
+                    fixedSizeLabel={isPanorama ? "全景 2:1" : undefined}
+                />
+            ) : mode === "video" ? (
+                <CanvasVideoSettingsPopover config={config} buttonClassName={sharedButtonClassName} onConfigChange={(key, value) => onConfigChange(node.id, canvasVideoConfigPatch(key, value))} />
+            ) : mode === "audio" ? (
+                <CanvasAudioSettingsPopover config={config} buttonClassName={sharedButtonClassName} onConfigChange={(key, value) => onConfigChange(node.id, canvasAudioConfigPatch(key, value))} />
+            ) : null;
+        const cameraControl =
+            mode === "video" || (mode === "image" && !isPanorama) ? <CanvasCameraControl value={node.metadata?.cameraControl} onChange={(cameraControl) => onConfigChange(node.id, { cameraControl })} buttonClassName={sharedButtonClassName} /> : null;
+
+        return (
+            <WorkspaceGenerationComposer
+                config={config}
+                colorTheme={colorTheme}
+                capability={mode}
+                model={config.model}
+                prompt={prompt}
+                references={composerReferences}
+                lockedReferenceIds={composerReferences.map((reference) => reference.id)}
+                busy={isRunning}
+                placeholder={canvasGenerationPlaceholder(node, mode)}
+                ariaLabel={`Canvas ${canvasGenerationModeLabel(mode)}创作`}
+                submitLabel={`生成${canvasGenerationModeLabel(mode)}`}
+                statusText={`${node.title || canvasGenerationModeLabel(mode)} · 结果写入当前节点链`}
+                promptEditor={
+                    <CanvasResourceMentionTextarea
+                        value={prompt}
+                        references={references}
+                        onChange={updatePrompt}
+                        onSubmit={submit}
+                        containerClassName="h-full"
+                        className="thin-scrollbar h-full w-full resize-none overflow-y-auto border-none bg-transparent px-[10px] pt-2 text-sm leading-6 outline-none"
+                        style={{ color: theme.node.text }}
+                        placeholder={canvasGenerationPlaceholder(node, mode)}
+                        aria-label={`${canvasGenerationModeLabel(mode)}生成指令`}
+                    />
+                }
+                supplementaryControls={
+                    mode === "video" ? (
+                        <>
+                            {renderVideoControls()}
+                            {cameraControl}
+                        </>
+                    ) : (
+                        cameraControl || undefined
+                    )
+                }
+                settingsControl={settingsControl}
+                footerExtras={
+                    <>
+                        <CanvasPromptLibrary onSelect={updatePrompt} />
+                        <span className="hidden shrink-0 items-center gap-0.5 text-[10px] opacity-65 sm:inline-flex" title={`预计消耗 ${formatCreditAmount(credits)} 积分`}>
+                            <CreditSymbol />
+                            {formatCreditAmount(credits)}
+                        </span>
+                    </>
+                }
+                allowReferenceUpload={mode === "image" || mode === "video"}
+                referenceUploadKinds={mode === "video" ? ["image", "video"] : ["image"]}
+                onAddReferenceFiles={onAddReferenceFiles ? (files) => onAddReferenceFiles(node.id, files) : undefined}
+                onPromptChange={updatePrompt}
+                onReferencesChange={() => undefined}
+                onModelChange={(model) => onConfigChange(node.id, { model })}
+                onConfigChange={(key, value) => onConfigChange(node.id, key === "count" ? { count: Number(value) || 1 } : { [key]: value })}
+                onSubmit={submit}
+                onStop={() => onStop(node.id)}
+                onMissingConfig={() => openConfigDialog(true, mode)}
+            />
+        );
+    }
 
     const renderEditor = (large = false) => (
         <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl" style={{ background: theme.node.fill, boxShadow: `inset 0 0 0 1px ${theme.node.stroke}` }}>
@@ -191,77 +348,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
             <div className="mt-1.5 transition-[height] duration-150" style={{ height: composerHeight }}>
                 {renderEditor()}
             </div>
-            {mode === "video" ? (
-                <div className="relative mt-1.5 flex items-center gap-1">
-                    <button type="button" className="inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-[10px]" style={{ background: theme.toolbar.itemHover }} onClick={() => setSkillOpen((open) => !open)}>
-                        <Sparkles className="size-3" />
-                        Skill
-                    </button>
-                    {skillOpen ? (
-                        <div
-                            className="thin-scrollbar absolute bottom-9 left-0 z-[120] max-h-[min(280px,55vh)] w-64 max-w-[calc(100vw-24px)] overflow-y-auto rounded-lg border p-1 shadow-xl"
-                            style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border }}
-                        >
-                            {skills.length ? (
-                                skills.map((skill) => {
-                                    const selected = selectedSkillIds.has(skill.id);
-                                    return (
-                                        <button
-                                            key={skill.id}
-                                            type="button"
-                                            aria-pressed={selected}
-                                            className="flex w-full items-start gap-2 rounded-md px-2 py-2 text-left text-xs transition-colors hover:brightness-95"
-                                            style={{ color: selected ? theme.toolbar.activeText : theme.toolbar.item, background: selected ? theme.toolbar.activeBg : "transparent" }}
-                                            onClick={() => {
-                                                toggleSkill(skill.id);
-                                                setSkillOpen(false);
-                                            }}
-                                        >
-                                            <Sparkles className="mt-0.5 size-3.5 shrink-0" />
-                                            <span className="min-w-0">
-                                                <span className="block truncate font-medium">{skill.name}</span>
-                                                <span className="block truncate opacity-60">{skill.description}</span>
-                                            </span>
-                                        </button>
-                                    );
-                                })
-                            ) : (
-                                <div className="px-2 py-2 text-xs opacity-60">暂无可用 Skill</div>
-                            )}
-                        </div>
-                    ) : null}
-                    {frameOptions.length ? (
-                        <>
-                            <select
-                                aria-label="视频起始帧"
-                                className="h-7 min-w-0 flex-1 rounded-full border bg-transparent px-2 text-[10px]"
-                                value={node.metadata?.videoStartFrameNodeId || ""}
-                                onChange={(event) => onConfigChange(node.id, { videoStartFrameNodeId: event.target.value || undefined })}
-                            >
-                                <option value="">起始帧</option>
-                                {frameOptions.map((item) => (
-                                    <option key={item.nodeId} value={item.nodeId}>
-                                        {item.label}
-                                    </option>
-                                ))}
-                            </select>
-                            <select
-                                aria-label="视频结束帧"
-                                className="h-7 min-w-0 flex-1 rounded-full border bg-transparent px-2 text-[10px]"
-                                value={node.metadata?.videoEndFrameNodeId || ""}
-                                onChange={(event) => onConfigChange(node.id, { videoEndFrameNodeId: event.target.value || undefined })}
-                            >
-                                <option value="">结束帧</option>
-                                {frameOptions.map((item) => (
-                                    <option key={item.nodeId} value={item.nodeId}>
-                                        {item.label}
-                                    </option>
-                                ))}
-                            </select>
-                        </>
-                    ) : null}
-                </div>
-            ) : null}
+            {mode === "video" ? renderVideoControls("mt-1.5") : null}
             <div className="mt-1.5 flex min-w-0 items-center gap-1.5">
                 <ModelPicker
                     className="!h-8 min-w-0 flex-1 !gap-1.5 !px-2.5 !text-[11px] [&_svg]:!size-4"
@@ -362,19 +449,8 @@ function ReferenceThumbnail({ reference }: { reference: CanvasResourceReference 
     );
 }
 
-function defaultMode(type: CanvasNodeData["type"]): CanvasNodeGenerationMode {
-    return type === CanvasNodeType.Text ? "text" : type === CanvasNodeType.Video ? "video" : type === CanvasNodeType.Audio ? "audio" : "image";
-}
-
 function escapeRegExp(value: string) {
     return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: CanvasNodeGenerationMode): AiConfig {
-    const defaultModel = mode === "image" ? globalConfig.imageModel : mode === "video" ? globalConfig.videoModel : mode === "audio" ? globalConfig.audioModel : globalConfig.textModel;
-    const model = node.metadata?.model || defaultModel || (mode === "audio" ? defaultConfig.audioModel : globalConfig.model || defaultConfig.model);
-    const config = buildCanvasNodeConfig(globalConfig, node, mode, model);
-    return node.type === CanvasNodeType.Panorama ? { ...config, size: PANORAMA_IMAGE_SIZE } : config;
 }
 
 function modeDisplayName(mode: CanvasNodeGenerationMode) {

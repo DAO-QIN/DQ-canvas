@@ -1,11 +1,8 @@
-export type CanvasAgentStableStageKey = "planning" | "skills" | "plan" | "executing" | "reviewing" | "finalizing" | "paused";
-export type CanvasAgentRunStageKey = CanvasAgentStableStageKey | "reconnecting";
+import type { WorkspaceAgentRunStage, WorkspaceAgentRunStageKey, WorkspaceAgentStableStageKey } from "@/lib/creative-workspace/workspace-agent-run-client";
 
-export type CanvasAgentRunStage = {
-    key: CanvasAgentRunStageKey;
-    text: string;
-    resumeKey?: CanvasAgentStableStageKey;
-};
+export type CanvasAgentStableStageKey = WorkspaceAgentStableStageKey;
+export type CanvasAgentRunStageKey = WorkspaceAgentRunStageKey;
+export type CanvasAgentRunStage = WorkspaceAgentRunStage;
 
 export type CanvasAgentProgressStep = {
     key: "canvas" | "skills" | "plan" | "execute" | "review" | "deliver";
@@ -24,7 +21,7 @@ const definitions: Array<Pick<CanvasAgentProgressStep, "key" | "label">> = [
 
 export function canvasAgentProgressSteps(stage: CanvasAgentRunStage): CanvasAgentProgressStep[] {
     const activeKey = stage.key === "reconnecting" ? stage.resumeKey || "planning" : stage.key;
-    const activeIndex = activeKey === "planning" ? 0 : activeKey === "skills" ? 1 : activeKey === "plan" ? 2 : activeKey === "executing" || activeKey === "paused" ? 3 : activeKey === "reviewing" ? 4 : 5;
+    const activeIndex = activeKey === "planning" ? 0 : activeKey === "skills" ? 1 : activeKey === "plan" || activeKey === "confirmation" ? 2 : activeKey === "executing" || activeKey === "paused" ? 3 : activeKey === "reviewing" ? 4 : 5;
     return definitions.map((step, index) => ({
         ...step,
         status: index < activeIndex ? "completed" : index > activeIndex ? "pending" : activeKey === "paused" ? "paused" : "running",

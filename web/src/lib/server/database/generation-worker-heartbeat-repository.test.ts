@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
     query: vi.fn(),
+    connect: vi.fn(),
     pool: vi.fn(),
 }));
 
@@ -21,8 +22,9 @@ describe("generation Worker heartbeat PostgreSQL repository", () => {
             if (sql.includes("SELECT last_seen_at")) return { rows: [{ last_seen_at: "2026-07-29T12:00:00.000Z" }] };
             return { rows: [] };
         });
+        mocks.connect.mockReset().mockResolvedValue({ query: mocks.query, release: vi.fn() });
         mocks.pool.mockReset().mockImplementation(function PoolMock() {
-            return { query: mocks.query };
+            return { query: mocks.query, connect: mocks.connect };
         });
     });
 
@@ -39,6 +41,7 @@ describe("generation Worker heartbeat PostgreSQL repository", () => {
 
         expect(statements.filter((sql) => sql.includes("SELECT to_regclass('public.dq_users')"))).toHaveLength(1);
         expect(statements.filter((sql) => sql.includes("CREATE TABLE IF NOT EXISTS dq_schema_migrations"))).toHaveLength(1);
+        expect(statements).toEqual(expect.arrayContaining(["BEGIN", expect.stringContaining("pg_advisory_xact_lock"), "COMMIT"]));
         expect(insertCall?.[1]).toEqual(["worker-1", at]);
         expect(deleteCall?.[1]).toEqual([new Date(at.getTime() - 10 * 60_000)]);
         expect(selectCall?.[1]).toBeUndefined();

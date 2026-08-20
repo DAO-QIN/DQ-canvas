@@ -69,6 +69,29 @@ describe("background removal API client", () => {
         expect(onTaskCreated).toHaveBeenCalledWith({ id: "task-persist", type: "image_process" });
     });
 
+    it("lets the Design route resolve a library locator without exposing its storage key", async () => {
+        const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ code: 0, data: { task: { id: "task-design", status: "pending" } }, msg: "OK" }), { status: 200 }));
+        vi.stubGlobal("fetch", fetchMock);
+
+        await createBackgroundRemovalTask({
+            projectId: "design-one",
+            surface: "design",
+            sourceElementId: "element-one",
+            sourceAssetVersionId: "version-one",
+            sourceLocator: { kind: "library-asset", libraryAssetId: "asset-one" },
+        });
+
+        const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+        expect(body).not.toHaveProperty("sourceStorageKey");
+        expect(body.context).toMatchObject({
+            surface: "design",
+            projectId: "design-one",
+            sourceElementId: "element-one",
+            sourceAssetVersionId: "version-one",
+            sourceLocator: { kind: "library-asset", libraryAssetId: "asset-one" },
+        });
+    });
+
     it("normalizes a legacy non-transparent preference before creating a new task", async () => {
         const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ code: 0, data: { task: { id: "task-transparent", status: "pending" } }, msg: "OK" }), { status: 200 }));
         vi.stubGlobal("fetch", fetchMock);

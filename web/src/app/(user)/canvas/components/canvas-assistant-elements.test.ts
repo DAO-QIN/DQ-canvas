@@ -24,7 +24,7 @@ describe("Canvas Agent current-turn references", () => {
         const sendSource = source.slice(source.indexOf("const sendMessage"), source.indexOf("const waitForBackendAgent"));
 
         expect(sendSource.indexOf("setRemovedReferenceIds")).toBeGreaterThanOrEqual(0);
-        expect(sendSource.indexOf("setRemovedReferenceIds")).toBeLessThan(sendSource.indexOf('fetch("/api/agent/runs"'));
+        expect(sendSource.indexOf("setRemovedReferenceIds")).toBeLessThan(sendSource.indexOf("agentRunController.create"));
     });
 
     it("keeps an uploaded canvas image as a stable Run reference URL", () => {

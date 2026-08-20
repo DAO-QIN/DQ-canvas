@@ -55,27 +55,27 @@ export function CanvasZoomControls({ scale, onScaleChange, onReset, isMiniMapOpe
                 <Tooltip title="快捷键">
                     <Button type="text" className="!h-8 !w-8 !min-w-8 !p-0" style={shortcutsOpen ? activeStyle : { color: theme.toolbar.item }} icon={<Keyboard className="size-4" />} onClick={() => setShortcutsOpen(true)} aria-label="打开画布快捷键" />
                 </Tooltip>
+                <Modal title="画布快捷键" open={shortcutsOpen} onCancel={() => setShortcutsOpen(false)} footer={null} centered width={620}>
+                    <div className="thin-scrollbar max-h-[min(70vh,620px)] space-y-1 overflow-y-auto border-t pt-3 text-sm" style={{ borderColor: theme.node.stroke }}>
+                        <Shortcut keys={["拖动空白处"]} value="平移画布" />
+                        <Shortcut keys={["Space", "拖动"]} value="临时平移画布" />
+                        <Shortcut keys={["鼠标中键", "拖动"]} value="平移画布" />
+                        <Shortcut keys={["滚轮 / 触控板"]} value="缩放画布" />
+                        <Shortcut keys={["双击空白处"]} value="打开组件创建菜单" />
+                        <Shortcut keys={["Ctrl / Cmd", "拖动"]} value="框选多个节点" />
+                        <Shortcut keys={["Shift / Ctrl / Cmd", "点击"]} value="追加或移除节点选择" />
+                        <Shortcut keys={["Ctrl / Cmd", "A"]} value="全选节点" />
+                        <Shortcut keys={["Ctrl / Cmd", "C"]} value="复制选中节点" />
+                        <Shortcut keys={["Ctrl / Cmd", "V"]} value="粘贴节点、文本或图片" />
+                        <Shortcut keys={["Ctrl / Cmd", "Z"]} value="撤销" />
+                        <Shortcut keys={["Ctrl / Cmd", "Shift", "Z"]} value="重做" />
+                        <Shortcut keys={["Ctrl / Cmd", "Y"]} value="重做" />
+                        <Shortcut keys={["Delete / Backspace"]} value="删除选中节点或连线" />
+                        <Shortcut keys={["Esc"]} value="取消选择、连线并关闭浮层" />
+                        <Shortcut keys={["拖入媒体文件"]} value="上传图片、视频或音频" />
+                    </div>
+                </Modal>
             </div>
-            <Modal title="画布快捷键" open={shortcutsOpen} onCancel={() => setShortcutsOpen(false)} footer={null} centered width={620}>
-                <div className="thin-scrollbar max-h-[min(70vh,620px)] space-y-1 overflow-y-auto border-t pt-3 text-sm" style={{ borderColor: theme.node.stroke }}>
-                    <Shortcut keys={["拖动空白处"]} value="平移画布" />
-                    <Shortcut keys={["Space", "拖动"]} value="临时平移画布" />
-                    <Shortcut keys={["鼠标中键", "拖动"]} value="平移画布" />
-                    <Shortcut keys={["滚轮 / 触控板"]} value="缩放画布" />
-                    <Shortcut keys={["双击空白处"]} value="打开组件创建菜单" />
-                    <Shortcut keys={["Ctrl / Cmd", "拖动"]} value="框选多个节点" />
-                    <Shortcut keys={["Shift / Ctrl / Cmd", "点击"]} value="追加或移除节点选择" />
-                    <Shortcut keys={["Ctrl / Cmd", "A"]} value="全选节点" />
-                    <Shortcut keys={["Ctrl / Cmd", "C"]} value="复制选中节点" />
-                    <Shortcut keys={["Ctrl / Cmd", "V"]} value="粘贴节点、文本或图片" />
-                    <Shortcut keys={["Ctrl / Cmd", "Z"]} value="撤销" />
-                    <Shortcut keys={["Ctrl / Cmd", "Shift", "Z"]} value="重做" />
-                    <Shortcut keys={["Ctrl / Cmd", "Y"]} value="重做" />
-                    <Shortcut keys={["Delete / Backspace"]} value="删除选中节点或连线" />
-                    <Shortcut keys={["Esc"]} value="取消选择、连线并关闭浮层" />
-                    <Shortcut keys={["拖入媒体文件"]} value="上传图片、视频或音频" />
-                </div>
-            </Modal>
         </div>
     );
 }

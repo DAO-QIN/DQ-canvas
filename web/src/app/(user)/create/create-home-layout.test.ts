@@ -2,28 +2,72 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-describe("create Agent home layout", () => {
-    it("keeps Agent input, recent work and reusable public inspiration in one flow", async () => {
-        const [page, composer, overview, inspiration, previewModal] = await Promise.all([
+describe("create home layout", () => {
+    it("keeps the unified composer, recent work and reusable public inspiration in one flow", async () => {
+        const [page, composer, directCreation, overview, inspiration, previewModal] = await Promise.all([
             readFile(resolve(process.cwd(), "src/app/(user)/create/page.tsx"), "utf8"),
             readFile(resolve(process.cwd(), "src/app/(user)/create/components/creative-composer.tsx"), "utf8"),
+            readFile(resolve(process.cwd(), "src/app/(user)/create/use-direct-creation.ts"), "utf8"),
             readFile(resolve(process.cwd(), "src/app/(user)/create/components/create-workbench-overview.tsx"), "utf8"),
             readFile(resolve(process.cwd(), "src/app/(user)/create/components/create-inspiration-gallery.tsx"), "utf8"),
             readFile(resolve(process.cwd(), "src/components/works/public-work-preview-modal.tsx"), "utf8"),
         ]);
 
-        expect(page).toContain("创作 Agent");
+        expect(page).toContain("creationModeLabels[mode]");
+        expect(page).toContain('useState<CreationMode>("agent")');
+        expect(page).toContain("useDirectCreation(config, currentUser?.id)");
+        expect(page).toContain('mode === "agent" ? agent.sending : direct.busy');
+        expect(page).toContain("DirectCreationMessages");
         expect(page).toContain("createAgentPromptFromHash");
         expect(page).not.toContain("最近创作");
         expect(page).toContain("<CreateInspirationGallery");
         expect(page.indexOf("<CreateWorkbenchOverview")).toBeLessThan(page.indexOf("<CreateInspirationGallery"));
         expect(page).toContain("usePublicImage");
         expect(composer).toContain('centered ? "max-w-[960px]"');
+        expect(composer).toContain('{ id: "agent", label: "Agent"');
+        expect(composer).toContain("function QBrandIcon()");
+        expect(composer).toContain('className="size-6 shrink-0 object-contain dark:invert"');
+        expect(composer).toContain('{ id: "text", label: "文本创作"');
+        expect(composer).toContain('{ id: "image", label: "图片生成"');
+        expect(composer).toContain('{ id: "video", label: "视频生成"');
+        expect(composer).not.toContain('id: "music"');
+        expect(composer).toContain("onAttachment");
+        expect(composer).toContain("参考内容");
+        expect(composer).toContain("SkillPicker");
+        expect(composer).toContain("RecentAssetMentionPicker");
+        expect(composer).toContain("mentionDraftAt");
+        expect(composer).toContain('icon={<AtSign className="size-4" />}');
+        expect(composer).toContain("function ComposerReferenceMedia");
+        expect(composer).toContain("aria-label={`放大查看 ${title}`}");
+        expect(composer).toContain("setPreviewOpen(true)");
+        expect(composer).toContain('placement="bottomRight"');
+        expect(composer).toContain("autoAdjustOverflow={false}");
+        expect(page).toContain("onMentionRecentAsset={importRecentAsset}");
+        expect(page).toContain("recentOverviewAssetToCreativeAsset");
+        expect(page).toContain("agent.referenceExistingAsset");
+        expect(page).not.toContain("importReferenceMedia({ url: asset.url");
+        expect(page).toContain('setVideoMethod("reference")');
+        expect((composer.match(/placement=\"bottomLeft\"/g) || []).length).toBeGreaterThanOrEqual(2);
+        expect(composer.indexOf("<ComposerReferences")).toBeLessThan(composer.indexOf("<Input.TextArea"));
+        expect(composer).toContain('<span className="truncate">Skill</span>');
+        expect(composer).toContain("CreativeImageSettingsPanel");
+        expect(composer).toContain("CreativeVideoSettingsPanel");
+        expect(composer).toContain("creativeVideoResolutionOptions");
+        expect(composer).toContain("VideoDurationPicker");
+        expect(composer).toContain("step={1}");
+        expect(composer).toContain('if (aspect === "auto") return "auto";');
+        expect(composer).toContain('title="选择比例"');
+        expect(composer.indexOf("<VoiceInputButton")).toBeLessThan(composer.lastIndexOf('aria-label={busy ? "停止生成" : "发送"}'));
+        expect(directCreation).toContain("createTextGenerationTask");
+        expect(directCreation).toContain("createImageGenerationTask");
+        expect(directCreation).toContain("createServerVideoGenerationTask");
+        expect(directCreation).toContain("createTrackedTasks");
         expect(composer).not.toContain("CreativeImageSizeControl");
-        const pointerDownHandler = composer.slice(composer.indexOf("const onPointerDown"), composer.indexOf("const onPointerMove"));
-        const pointerMoveHandler = composer.slice(composer.indexOf("const onPointerMove"), composer.indexOf("const finishDrag"));
-        expect(pointerDownHandler).not.toContain("setPointerCapture");
-        expect(pointerMoveHandler).toContain("setPointerCapture");
+        expect(composer).not.toContain("Paperclip");
+        expect(composer).not.toContain("Lightbulb");
+        expect(composer).not.toContain("CreativeAgentTextModelPicker");
+        expect(composer).not.toContain("Orbit");
+        expect(page).not.toContain("selectedModelIds");
         expect(inspiration).toContain("灵感发现");
         expect(inspiration).toContain("使用提示词");
         expect(inspiration).toContain("复制提示词");
@@ -61,16 +105,15 @@ describe("create Agent home layout", () => {
         expect(previewModal).toContain('asset.mediaType === "image" || asset.mediaType === "video"');
     });
 
-    it("places the Agent model picker between planning and generation controls", async () => {
+    it("keeps skill selection available for every mode", async () => {
         const [page, composer] = await Promise.all([readFile(resolve(process.cwd(), "src/app/(user)/create/page.tsx"), "utf8"), readFile(resolve(process.cwd(), "src/app/(user)/create/components/creative-composer.tsx"), "utf8")]);
 
-        expect(page).toContain('const [selectedAgentModelId, setSelectedAgentModelId] = useState("")');
-        expect(page).toContain("agentModelId: selectedAgentModelId");
-        expect(page).toContain("onAgentModelChange={(model) =>");
-        expect(page).toContain('setSelectedAgentModelId("")');
-        expect(composer).toContain("CreativeAgentTextModelPicker");
-        expect(composer.indexOf("<CreativeAgentTextModelPicker")).toBeGreaterThan(composer.indexOf("<Lightbulb"));
-        expect(composer.indexOf("<CreativeAgentTextModelPicker")).toBeLessThan(composer.indexOf("<Orbit"));
-        expect(composer).toContain("disabled={busy}");
+        expect(page).toContain("selectedSkillIds");
+        expect(page).toContain("skillIds: selectedSkillId ? [selectedSkillId] : []");
+        expect(composer).toContain("const visibleSkills = skills.filter");
+        expect(composer).toContain('mode === "agent"');
+        expect(composer).toContain('mode === "text"');
+        expect(composer).toContain('mode === "image"');
+        expect(composer).toContain('mode === "video"');
     });
 });

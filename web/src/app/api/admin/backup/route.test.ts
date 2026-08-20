@@ -1,9 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/auth/session", () => ({ getCurrentUser: vi.fn(async () => ({ id: "admin-one", role: "admin" })) }));
+const mocks = vi.hoisted(() => ({ getCurrentUser: vi.fn(), readAdminBackupData: vi.fn() }));
+
+vi.mock("@/lib/auth/session", () => ({ getCurrentUser: mocks.getCurrentUser }));
 vi.mock("@/lib/auth/store-normalizers", () => ({ encryptAuthDbSecretsForStorage: vi.fn((value) => value) }));
-vi.mock("@/lib/server/admin-backup-policy", () => ({ mergeAuthBackupSecrets: vi.fn(), sanitizeAuthBackup: vi.fn() }));
-vi.mock("@/lib/server/admin-backup-store", () => ({ readAdminBackupData: vi.fn(), restoreAdminBackupData: vi.fn() }));
+vi.mock("@/lib/server/admin-backup-policy", async (importOriginal) => {
+    const original = await importOriginal<typeof import("@/lib/server/admin-backup-policy")>();
+    return { ...original, mergeAuthBackupSecrets: vi.fn(), sanitizeAuthBackup: vi.fn((value) => value) };
+});
+vi.mock("@/lib/server/admin-backup-store", () => ({ readAdminBackupData: mocks.readAdminBackupData, restoreAdminBackupData: vi.fn() }));
 vi.mock("@/lib/server/database", () => ({ getDatabaseProvider: vi.fn(() => "file") }));
 vi.mock("@/lib/server/data-adapter", () => ({
     copyDataFile: vi.fn(),
@@ -14,9 +19,30 @@ vi.mock("@/lib/server/data-adapter", () => ({
     writeJsonDataFile: vi.fn(),
 }));
 
-import { POST } from "./route";
+import { GET, POST } from "./route";
 
-describe("POST /api/admin/backup", () => {
+describe("/api/admin/backup", () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mocks.getCurrentUser.mockResolvedValue({ id: "admin-one", role: "admin" });
+        mocks.readAdminBackupData.mockResolvedValue({
+            auth: { users: [], settings: {} },
+            prompts: { version: 1, prompts: [], seedSources: [] },
+            generationLogs: { version: 1, logs: [] },
+            accountDeletionRequests: { version: 1, requests: [] },
+        });
+    });
+
+    it("exports a machine-readable account-config scope that excludes creative recovery", async () => {
+        const response = await GET();
+        const backup = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(backup).toMatchObject({ backupType: "account-config", scope: { mode: "account-config", restoreStrategy: "merge-no-delete", disasterRecovery: false } });
+        expect(backup.scope.excluded).toEqual(expect.arrayContaining(["canvas-projects", "design-projects", "creative-runtime", "generation-tasks", "media-binaries"]));
+        expect(backup.files).not.toHaveProperty("designProjects");
+    });
+
     it("rejects an oversized multipart backup before parsing it", async () => {
         const response = await POST(
             new Request("http://localhost/api/admin/backup", {

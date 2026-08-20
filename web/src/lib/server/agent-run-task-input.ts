@@ -1,15 +1,19 @@
 import type { AuthSettings } from "@/lib/auth/store";
+import { defineWorkspaceSnapshot, type DesignSurfaceBinding, type WorkspaceSnapshot, type WorkspaceStableResourceLocator } from "@/lib/creative-workspace";
 import { closestImageAspectRatio, normalizeImageSizeValue, parseImageDimensions } from "@/lib/image-size";
+import type { DesignStableResourceLocator } from "@/lib/design";
 import type { AgentRun, AgentRunReference, AgentRunTask } from "@/lib/server/agent-run-store";
 import type { AgentPlan } from "@/lib/server/agent-run-validation";
 
 import { selectedCanvasNodeIds } from "./agent-run-surface-policy";
+import { agentCanvasSnapshotNodes, agentCanvasSnapshotRelations } from "./agent-canvas-snapshot";
 import { agentCanvasOutputNodeIds, agentCanvasTaskNodeId } from "./agent-run-canvas-node-ids";
 
 export type CanvasTaskReferenceNode = {
     title: string;
     summary: string;
     url?: string;
+    resource?: WorkspaceStableResourceLocator;
     type?: AgentRunTask["type"];
     content?: string;
     width?: number;
@@ -17,24 +21,61 @@ export type CanvasTaskReferenceNode = {
     size?: string;
 };
 
+export type DesignAgentTaskTarget = Readonly<{
+    binding: DesignSurfaceBinding;
+    referenceLocator?: DesignStableResourceLocator;
+}>;
+
+export function designAgentTaskTarget(snapshotValue: unknown, taskType: AgentRunTask["type"]): DesignAgentTaskTarget | undefined {
+    if (taskType !== "image") return undefined;
+    let snapshot: WorkspaceSnapshot;
+    try {
+        snapshot = defineWorkspaceSnapshot(snapshotValue as WorkspaceSnapshot);
+    } catch {
+        return undefined;
+    }
+    if (snapshot.surface !== "design") return undefined;
+    const entityById = new Map(snapshot.entities.map((entity) => [entity.id, entity]));
+    const selected = snapshot.selectionIds.map((id) => entityById.get(id)).filter((entity): entity is WorkspaceSnapshot["entities"][number] => Boolean(entity));
+    const selectedImage = selected.length === 1 && selected[0].kind === "image" ? selected[0] : undefined;
+    const selectedFrame = selected.length === 1 && selected[0].kind === "frame" ? selected[0] : undefined;
+    const commonFrameId = selected.length && selected.every((entity) => entity.parentId && entity.parentId === selected[0].parentId) ? selected[0].parentId : undefined;
+    const frameId = selectedFrame?.id || selectedImage?.parentId || commonFrameId;
+    const validFrameId = frameId && entityById.get(frameId)?.kind === "frame" ? frameId : undefined;
+    const binding: DesignSurfaceBinding = Object.freeze({
+        surface: "design",
+        projectId: snapshot.projectId,
+        baseRevision: snapshot.revision,
+        target: validFrameId ? Object.freeze({ scope: "frame" as const, frameId: validFrameId }) : Object.freeze({ scope: "workspace" as const }),
+        ...(selectedImage ? { elementId: selectedImage.id } : {}),
+    });
+    const resource = selectedImage?.resource;
+    const referenceLocator =
+        resource?.kind === "storage-key"
+            ? Object.freeze({ kind: "storage-key" as const, storageKey: resource.storageKey })
+            : resource?.kind === "library-asset"
+              ? Object.freeze({ kind: "library-asset" as const, libraryAssetId: resource.libraryAssetId })
+              : undefined;
+    return Object.freeze({ binding, ...(referenceLocator ? { referenceLocator } : {}) });
+}
+
 export function canvasSnapshotNodes(snapshot: unknown) {
     const map = new Map<string, CanvasTaskReferenceNode>();
-    const nodes = snapshot && typeof snapshot === "object" && Array.isArray((snapshot as { nodes?: unknown }).nodes) ? (snapshot as { nodes: Array<Record<string, unknown>> }).nodes : [];
-    for (const node of nodes) {
-        if (typeof node.id !== "string") continue;
-        const metadata = node.metadata && typeof node.metadata === "object" ? (node.metadata as Record<string, unknown>) : {};
-        const content = [metadata.content, metadata.prompt].find((item) => typeof item === "string" && item);
-        const url = [metadata.remoteUrl, metadata.serverUrl, metadata.url, metadata.dataUrl].find((item) => typeof item === "string" && item) as string | undefined;
-        const type = node.type === "panorama" ? "image" : node.type === "text" || node.type === "image" || node.type === "video" || node.type === "audio" ? node.type : undefined;
+    const legacyNodes = legacySnapshotNodes(snapshot);
+    for (const node of agentCanvasSnapshotNodes(snapshot)) {
+        const legacyMetadata = legacyNodes.get(node.id);
+        const url = [legacyMetadata?.remoteUrl, legacyMetadata?.serverUrl, legacyMetadata?.url, legacyMetadata?.dataUrl].find((item) => typeof item === "string" && item) as string | undefined;
+        const type = node.type === "text" || node.type === "image" || node.type === "video" || node.type === "audio" ? node.type : undefined;
         map.set(node.id, {
-            title: String(node.title || node.type || "节点").slice(0, 200),
-            summary: `${String(node.title || node.type || "节点").slice(0, 200)}${content ? `；内容：${String(content).slice(0, 2000)}` : ""}${url && !url.startsWith("data:") ? `；素材：${url.slice(0, 2000)}` : ""}`,
-            url,
+            title: node.title,
+            summary: `${node.title}${node.content ? `；内容：${node.content}` : ""}`,
+            ...(url ? { url } : {}),
+            ...(node.resource ? { resource: node.resource } : {}),
             type,
-            content: typeof content === "string" ? content : undefined,
-            width: positiveNumber(metadata.naturalWidth) || positiveNumber(node.width),
-            height: positiveNumber(metadata.naturalHeight) || positiveNumber(node.height),
-            size: typeof metadata.size === "string" ? metadata.size : undefined,
+            content: node.content,
+            width: node.width,
+            height: node.height,
+            size: node.size,
         });
     }
     return map;
@@ -69,12 +110,11 @@ export function resolveAgentTaskRatio(input: {
 export function agentSurfaceImageSize(surface: AgentRun["surface"], snapshot: unknown) {
     if (!snapshot || typeof snapshot !== "object") return undefined;
     if (surface === "canvas") {
-        const canvasSnapshot = snapshot as { imageSize?: unknown; nodes?: unknown; connections?: unknown };
-        const nodes = Array.isArray(canvasSnapshot.nodes) ? canvasSnapshot.nodes.filter((node): node is Record<string, unknown> => Boolean(node) && typeof node === "object") : [];
+        const canvasSnapshot = snapshot as { imageSize?: unknown };
+        const nodes = agentCanvasSnapshotNodes(snapshot);
         const configuredNodes = nodes.flatMap((node) => {
-            if (node.type !== "config" || typeof node.id !== "string") return [];
-            const metadata = node.metadata && typeof node.metadata === "object" ? (node.metadata as Record<string, unknown>) : {};
-            const size = exactImageSize(metadata.size);
+            if (node.type !== "config") return [];
+            const size = exactImageSize(node.size || node.content);
             return size ? [{ id: node.id, size }] : [];
         });
         const imageSize = exactImageSize(canvasSnapshot.imageSize);
@@ -84,7 +124,7 @@ export function agentSurfaceImageSize(surface: AgentRun["surface"], snapshot: un
         const selectedConfig = configuredNodes.find((node) => selected.has(node.id));
         if (selectedConfig) return selectedConfig.size;
 
-        const connections = Array.isArray(canvasSnapshot.connections) ? canvasSnapshot.connections.filter((connection): connection is Record<string, unknown> => Boolean(connection) && typeof connection === "object") : [];
+        const connections = agentCanvasSnapshotRelations(snapshot);
         const connectedConfig = configuredNodes.find((node) =>
             connections.some((connection) => (connection.fromNodeId === node.id && selected.has(String(connection.toNodeId || ""))) || (connection.toNodeId === node.id && selected.has(String(connection.fromNodeId || "")))),
         );
@@ -179,9 +219,10 @@ export function prepareFailedAgentTaskRetry(run: AgentRun, task: AgentRunTask, s
     return {
         ...task,
         targetNodeId: target ? targetNodeId : task.targetNodeId,
-        referenceUrl: primaryReference?.url || task.referenceUrl,
-        referenceType: primaryReference?.type || task.referenceType,
+        ...(primaryReference?.url || task.referenceUrl ? { referenceUrl: primaryReference?.url || task.referenceUrl } : {}),
+        ...(primaryReference?.type || task.referenceType ? { referenceType: primaryReference?.type || task.referenceType } : {}),
         references,
+        referenceLocator: target?.resource || task.referenceLocator,
         ratio: resolveAgentTaskRatio({
             type: task.type,
             requestedImageSize: run.requestedImageSize,
@@ -256,4 +297,18 @@ function positiveNumber(value: unknown) {
 function exactImageSize(value: unknown) {
     const normalized = normalizeImageSizeValue(value);
     return parseImageDimensions(normalized) ? normalized : undefined;
+}
+
+function legacySnapshotNodes(snapshot: unknown) {
+    const source = snapshot && typeof snapshot === "object" && !Array.isArray(snapshot) ? (snapshot as Record<string, unknown>) : {};
+    const nodes = Array.isArray(source.nodes) ? source.nodes : [];
+    return new Map(
+        nodes.flatMap((value): Array<readonly [string, Record<string, unknown>]> => {
+            if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+            const node = value as Record<string, unknown>;
+            const id = typeof node.id === "string" ? node.id : "";
+            const metadata = node.metadata && typeof node.metadata === "object" && !Array.isArray(node.metadata) ? (node.metadata as Record<string, unknown>) : {};
+            return id ? [[id, metadata] as const] : [];
+        }),
+    );
 }

@@ -4,7 +4,7 @@
 
 <h1 align="center">DQ-绘图</h1>
 
-<p align="center">面向 Agent、图片、视频、Canvas 与短剧生产的开源 AI 创作工作台</p>
+<p align="center">面向 Agent、图片、视频、智能 Canvas、设计画板与短剧生产的开源 AI 创作工作台</p>
 
 <p align="center">
   <a href="https://github.com/DAO-QIN/DQ-canvas"><img src="https://img.shields.io/github/stars/DAO-QIN/DQ-canvas?style=flat-square&logo=github" alt="GitHub stars"></a>
@@ -19,6 +19,7 @@
   <a href="docs/index.md">文档索引</a> ·
   <a href="docs/content/docs/overview/configuration.mdx">0.0.3 发布说明</a> ·
   <a href="docs/content/docs/overview/project-structure.mdx">项目结构</a> ·
+  <a href="docs/progress/design-board/implementation-status.md">画板进度</a> ·
   <a href="docs/content/docs/overview/page-gallery.mdx">页面图册</a> ·
   <a href="CONTRIBUTING.md">参与贡献</a> ·
   <a href="CHANGELOG.md">更新记录</a>
@@ -26,7 +27,7 @@
 
 ![DQ-绘图 首页](docs/public/screenshots/pages/01-home.webp)
 
-DQ-绘图 把统一创作 Agent、图片与视频工作台、画布、短剧生产、素材库和商业运营后台放在同一套 Next.js 全栈应用中。PostgreSQL 保存账号与业务数据；媒体可写入服务器本地目录或 S3 兼容对象存储；模型、支付和存储密钥只在服务端使用。
+DQ-绘图 把统一创作 Agent、图片与视频工作台、节点式 Canvas、平面设计画板、短剧生产、素材库和商业运营后台放在同一套 Next.js 全栈应用中。PostgreSQL 保存账号与业务数据；媒体可写入服务器本地目录或 S3 兼容对象存储；模型、支付和存储密钥只在服务端使用。
 
 ## 核心功能
 
@@ -34,12 +35,19 @@ DQ-绘图 把统一创作 Agent、图片与视频工作台、画布、短剧生�
 - **图片工作台**：文生图、图生图、参考图编辑、多结果、历史恢复、失败重试、WebP 预览和原件下载。
 - **视频工作台**：文生视频、图生视频、多类型参考素材、时长/比例/清晰度参数、异步续取和结果管理。
 - **画布**：文本、图片、全景图、绘图、视频、音频与生成配置节点，支持资源引用、编组、连线中点插入、性能模式和真实任务进度；图片节点提供标注、情绪、人物质感、多视角、锁定、媒体替换与可取消的 rembg CPU 抠图。
+- **设计画板**：独立 `/design` 项目域提供无限 Workspace、多固定尺寸 Frame、图片/文字/图形排版、图层、裁剪、对齐、历史、AI 图片派生和原始尺寸 PNG/JPEG/WebP 导出。
 - **短剧生产线**：剧本、内容审核、角色/场景/道具、分镜、镜头视频、配音、字幕、版本和 FFmpeg 合成。
 - **作品广场**：作品草稿、版本审核、发布分享、广场检索、作者主页、点赞关注、下架重发和内容治理。
 - **模型与协议**：管理员维护渠道、协议、真实模型、逻辑模型、能力、优先级和默认值，覆盖 OpenAI、Gemini、Seedance 2.0、Stable Diffusion、A1111/Forge 和声明式自定义协议。
 - **持久生成**：独立 Worker 负责图片、视频、音频和 Agent 任务续取，页面关闭或实例切换后继续查询原上游任务，并在生成运维中处理异常任务。
 - **商业后台**：用户、套餐、促销、优惠券、邀请奖励、积分、CDK、订单、支付、退款、对账、财务流水、作品治理、公告、提示词和审计日志。
 - **存储与备份**：本地媒体、S3 兼容对象存储、引用保护、对象迁移和脱敏业务数据导入导出。
+
+## 最新进度
+
+- Design 与 Canvas 已使用同一套创作工作台布局、生成 Composer、任务恢复、素材选择、Agent 面板和跨 Surface Handoff；Design 继续使用 `DesignDocument + Design Ops + Fabric`，Canvas 继续使用节点/连线 Store，两套文档、历史和保存契约保持隔离。
+- Design 已完成独立 PostgreSQL/文件 Provider、乐观锁、版本恢复、资源归属校验、图片工具、生成结果回写、单 Frame 下载、多 Frame ZIP 与 `manifest.json` 导出。
+- 当前阶段为“本地生产门禁通过、线上灰度待执行”。`NEXT_PUBLIC_DQ_CREATIVE_WORKSPACE_DESIGN_ENABLED` 与 `NEXT_PUBLIC_DQ_CREATIVE_WORKSPACE_CANVAS_ENABLED` 是构建时开关且默认关闭；外部文本、图片、视频模型的本轮真实联调仍因 HTTP 401 未通过。完整证据见[实施状态](docs/progress/design-board/implementation-status.md)和[最终 Gate 报告](docs/progress/design-board/p6-final-gate-report.md)。
 
 ## 项目功能流程
 

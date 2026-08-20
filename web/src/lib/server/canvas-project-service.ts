@@ -1,7 +1,8 @@
 import { nanoid } from "nanoid";
 
 import type { CanvasProject, CreateCanvasProjectInput } from "@/lib/canvas-project-contract";
-import { createCanvasProject, CanvasProjectStoreError, deleteCanvasProjects, getCanvasProject, listCanvasProjects, listCanvasProjectSummaries, updateCanvasProject } from "@/lib/server/canvas-project-store";
+import { canvasProjectRevision, canvasSaveBatchId, canvasSaveFingerprint, type CanvasSaveEnvelope } from "@/lib/canvas-project-receipt";
+import { createCanvasProject, CanvasProjectStoreError, deleteCanvasProjects, getCanvasProject, listCanvasProjects, listCanvasProjectSummaries, saveCanvasProject } from "@/lib/server/canvas-project-store";
 import { collectLocalMediaStorageKeys } from "@/lib/server/local-media-references";
 import { deleteUserLocalMediaAssets } from "@/lib/server/local-media-storage";
 import { createCreativeConversation, updateCreativeConversation } from "@/lib/server/creative-runtime-store";
@@ -12,6 +13,7 @@ export class CanvasProjectServiceError extends Error {
     constructor(
         message: string,
         readonly status: number,
+        readonly details?: unknown,
     ) {
         super(message);
     }
@@ -65,10 +67,15 @@ export async function createCanvasProjectForUser(userId: string, value: unknown)
 export async function updateCanvasProjectForUser(userId: string, id: string, value: unknown) {
     const current = await getCanvasProject(text(id, 160), userId);
     if (!current) throw new CanvasProjectServiceError("画布项目不存在", 404);
-    const incomingUpdatedAt = parseTimestamp(object(value).updatedAt);
-    if (incomingUpdatedAt && incomingUpdatedAt < parseTimestamp(current.updatedAt)) return current;
-    const project = normalizeProject(object(value), current);
-    return updateCanvasProject(userId, project);
+    const input = object(value) as CanvasSaveEnvelope;
+    const expectedRevision = parseRevision(input.expectedRevision, canvasProjectRevision(current));
+    const project = normalizeProject(object(input.project || input), current);
+    const batchId = text(input.batchId, 200) || canvasSaveBatchId(project.id, expectedRevision + 1);
+    const fingerprint = text(input.fingerprint, 200) || canvasSaveFingerprint(project, expectedRevision);
+    if (fingerprint !== canvasSaveFingerprint(project, expectedRevision)) throw new CanvasProjectServiceError("Canvas save fingerprint invalid", 400);
+    const result = await saveCanvasProject(userId, { project, expectedRevision, batchId, fingerprint });
+    if (result.receipt.status === "conflict") throw new CanvasProjectServiceError(result.receipt.error?.message || "Canvas save conflict", 409, result.receipt);
+    return result;
 }
 
 export async function deleteCanvasProjectsForUser(userId: string, value: unknown) {
@@ -127,9 +134,11 @@ function text(value: unknown, max: number) {
     return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 
-function parseTimestamp(value: unknown) {
-    const time = Date.parse(String(value || ""));
-    return Number.isFinite(time) ? time : 0;
+function parseRevision(value: unknown, fallback: number) {
+    if (value === undefined) return fallback;
+    const revision = Number(value);
+    if (!Number.isSafeInteger(revision) || revision < 0) throw new CanvasProjectServiceError("expectedRevision invalid", 400);
+    return revision;
 }
 
 export function canvasProjectError(error: unknown) {

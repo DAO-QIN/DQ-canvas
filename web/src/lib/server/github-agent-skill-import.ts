@@ -12,7 +12,7 @@ const MAX_MARKDOWN_LENGTH = 256_000;
 const MAX_TREE_LENGTH = 4_000_000;
 const MAX_CANDIDATES = 20;
 const REQUEST_TIMEOUT_MS = 15_000;
-const WORKSPACES: AgentSkillWorkspace[] = ["image", "video", "canvas", "drama"];
+const WORKSPACES: AgentSkillWorkspace[] = ["image", "video", "canvas", "design", "drama"];
 
 type GitHubLocation = {
     owner: string;

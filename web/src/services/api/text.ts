@@ -4,7 +4,7 @@ import { GenerationTaskNeedsReviewError, type GenerationTaskExecutionState } fro
 import { refreshUserPointsIfSystem, syncUserPointsFromHeaders } from "@/services/api/points";
 import { throwIfClientSessionExpired } from "@/services/api/session-expiration";
 
-type RequestOptions = { signal?: AbortSignal; surface?: "chat" | "canvas" | "drama"; projectId?: string; conversationId?: string; runId?: string; clientRequestId?: string; sourceNodeId?: string; targetNodeId?: string };
+type RequestOptions = { signal?: AbortSignal; surface?: "chat" | "canvas" | "drama"; projectId?: string; conversationId?: string; runId?: string; clientRequestId?: string; sourceNodeId?: string; targetNodeId?: string; skillIds?: string[] };
 
 export type TextGenerationTask = {
     id: string;
@@ -32,6 +32,7 @@ export async function createTextGenerationTask(config: AiConfig, messages: AiTex
         body: JSON.stringify({
             config: { model: requestConfig.model },
             messages,
+            skillIds: options?.skillIds,
             context: options
                 ? { surface: options.surface, projectId: options.projectId, conversationId: options.conversationId, runId: options.runId, clientRequestId: options.clientRequestId, sourceNodeId: options.sourceNodeId, targetNodeId: options.targetNodeId }
                 : undefined,
@@ -41,6 +42,19 @@ export async function createTextGenerationTask(config: AiConfig, messages: AiTex
     throwIfClientSessionExpired(response);
     const payload = (await response.json().catch(() => ({}))) as TextTaskPayload;
     if (!response.ok || !payload.task) throw new Error(payload.error || "创建文本任务失败");
+    return payload.task;
+}
+
+export async function cancelTextGenerationTask(task: Pick<TextGenerationTask, "id">) {
+    const response = await fetch(`/api/text-tasks/${encodeURIComponent(task.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "cancelled" }),
+        cache: "no-store",
+    });
+    throwIfClientSessionExpired(response);
+    const payload = (await response.json().catch(() => ({}))) as TextTaskPayload;
+    if (!response.ok) throw new Error(payload.error || "文本任务取消失败");
     return payload.task;
 }
 

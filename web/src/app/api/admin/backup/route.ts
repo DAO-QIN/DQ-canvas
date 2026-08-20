@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth/session";
 import { encryptAuthDbSecretsForStorage } from "@/lib/auth/store-normalizers";
-import { mergeAuthBackupSecrets, sanitizeAuthBackup } from "@/lib/server/admin-backup-policy";
+import { ADMIN_ACCOUNT_CONFIG_BACKUP_SCOPE, mergeAuthBackupSecrets, sanitizeAuthBackup } from "@/lib/server/admin-backup-policy";
 import { readAdminBackupData, restoreAdminBackupData, type AdminBackupData } from "@/lib/server/admin-backup-store";
 import { getDatabaseProvider } from "@/lib/server/database";
 import { copyDataFile, ensureDataDirectory, listDataDirectory, removeDataPath, resolveDataPath, writeJsonDataFile } from "@/lib/server/data-adapter";
@@ -34,6 +34,7 @@ export async function GET() {
         version: 1,
         backupType: "account-config",
         exportedAt,
+        scope: ADMIN_ACCOUNT_CONFIG_BACKUP_SCOPE,
         files: {
             auth: sanitizeAuthBackup(data.auth),
             prompts: data.prompts,

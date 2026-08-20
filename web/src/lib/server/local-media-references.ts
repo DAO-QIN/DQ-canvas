@@ -1,5 +1,6 @@
 import { readJsonDataFile } from "@/lib/server/data-adapter";
 import { ensurePostgresSchema, getDatabaseProvider, postgresQuery } from "@/lib/server/database";
+import { countDesignStorageKeyReferences } from "@/lib/server/design-resource-references";
 
 export async function countLocalMediaReferences(storageKeys: string[]) {
     const keys = Array.from(new Set(storageKeys.map(normalizeKey).filter(Boolean)));
@@ -7,8 +8,9 @@ export async function countLocalMediaReferences(storageKeys: string[]) {
     if (!keys.length) return counts;
     if (getDatabaseProvider() === "postgres") {
         await ensurePostgresSchema();
-        const result = await postgresQuery<{ storage_key: string; total: number | string }>(
-            `WITH requested AS (
+        const [result, designCounts] = await Promise.all([
+            postgresQuery<{ storage_key: string; total: number | string }>(
+                `WITH requested AS (
                 SELECT unnest($1::text[]) AS storage_key
             ), reference_counts AS (
                 SELECT r.storage_key, count(*)::int AS total
@@ -58,26 +60,30 @@ export async function countLocalMediaReferences(storageKeys: string[]) {
             FROM requested r
             LEFT JOIN reference_counts c ON c.storage_key = r.storage_key
             GROUP BY r.storage_key`,
-            [keys],
-        );
-        for (const row of result.rows) counts.set(normalizeKey(row.storage_key), Number(row.total) || 0);
+                [keys],
+            ),
+            countDesignStorageKeyReferences(keys),
+        ]);
+        for (const row of result.rows) {
+            const key = normalizeKey(row.storage_key);
+            counts.set(key, (Number(row.total) || 0) + (designCounts.get(key) || 0));
+        }
         return counts;
     }
-    const databases: unknown[] = await Promise.all([
-        readJsonDataFile<unknown>("creative-runtime.json", {}),
-        readJsonDataFile<unknown>("library-assets.json", {}),
-        readJsonDataFile<unknown>("canvas-projects.json", {}),
-        readJsonDataFile<unknown>("drama-projects.json", {}),
-        readJsonDataFile<unknown>("generation-logs.json", {}),
-        readJsonDataFile<unknown>("generation-tasks.json", []),
-        readJsonDataFile<unknown>("auth.json", {}),
+    const [databases, designCounts] = await Promise.all([
+        Promise.all([
+            readJsonDataFile<unknown>("creative-runtime.json", {}),
+            readJsonDataFile<unknown>("library-assets.json", {}),
+            readJsonDataFile<unknown>("canvas-projects.json", {}),
+            readJsonDataFile<unknown>("drama-projects.json", {}),
+            readJsonDataFile<unknown>("generation-logs.json", {}),
+            readJsonDataFile<unknown>("generation-tasks.json", []),
+            readJsonDataFile<unknown>("auth.json", {}),
+        ]),
+        countDesignStorageKeyReferences(keys),
     ]);
     databases[5] = activeGenerationTasks(databases[5]);
-    for (const key of keys)
-        counts.set(
-            key,
-            databases.reduce<number>((total, database) => total + countEntitiesContaining(database, key), 0),
-        );
+    for (const key of keys) counts.set(key, databases.reduce<number>((total, database) => total + countEntitiesContaining(database, key), 0) + (designCounts.get(key) || 0));
     return counts;
 }
 

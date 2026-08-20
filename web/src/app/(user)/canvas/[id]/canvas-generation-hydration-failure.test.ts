@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const actionsSource = readFileSync(new URL("./use-canvas-generation-actions.tsx", import.meta.url), "utf8");
 const runtimeSource = readFileSync(new URL("./use-canvas-task-runtime.tsx", import.meta.url), "utf8");
+const persistenceSource = readFileSync(new URL("./use-canvas-persistence-effects.tsx", import.meta.url), "utf8");
 
 describe("canvas generation hydration failures", () => {
     it("settles initial generation hydration failures and only clears the matching run", () => {
@@ -62,10 +63,22 @@ describe("canvas generation hydration failures", () => {
         expect(videoCompletion).toContain("assertGenerationRequestActive(nodeId, controller)");
         expect(videoCompletion).toContain("isGenerationRequestActive(nodeId, controller)");
     });
+
+    it("revalidates derived-image provenance before applying or resuming an image task", () => {
+        const completion = functionSource(runtimeSource, "const completeImageTask", "const startAndCompleteImageTask");
+        const resume = functionSource(persistenceSource, "const resumable = nodes.filter", "useEffect(() => {", persistenceSource.indexOf("const resumable = nodes.filter"));
+
+        expect(completion).toContain("canvasDerivedImageSourceMatches(target.metadata.derivedImageProvenance, nodesRef.current)");
+        expect(completion).toContain("canvasDerivedImageSourceMatches(target.metadata.derivedImageProvenance, prev)");
+        expect(resume).toContain("canvasDerivedImageSourceMatches(provenance, nodes)");
+        expect(resume).toContain('cancelCanvasGenerationTask({ id: task.id, type: "image" })');
+        expect(resume).toContain("current.filter((item) => item.id !== node.id)");
+        expect(resume).toContain("connection.fromNodeId !== node.id && connection.toNodeId !== node.id");
+    });
 });
 
-function functionSource(source: string, startMarker: string, endMarker: string) {
-    const start = requiredIndex(source, startMarker);
+function functionSource(source: string, startMarker: string, endMarker: string, fromIndex = 0) {
+    const start = requiredIndex(source, startMarker, fromIndex);
     const end = requiredIndex(source, endMarker, start + startMarker.length);
     return source.slice(start, end);
 }

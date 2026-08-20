@@ -3,6 +3,7 @@ import { listPrompts } from "@/lib/prompts/store";
 import { listCanvasProjects } from "@/lib/server/canvas-project-store";
 import { listCreativeAssets, listCreativeConversations, listCreativeMessages } from "@/lib/server/creative-runtime-store";
 import { createPostgresRepositories, ensurePostgresSchema, isPostgresDatabaseEnabled } from "@/lib/server/database";
+import { readDesignProjectArchive } from "@/lib/server/design-project-store";
 import { getDramaProject, listDramaProjectSummaries } from "@/lib/server/drama-project-store";
 import { listGenerationLogs } from "@/lib/server/generation-log-store";
 import { listLibraryAssets } from "@/lib/server/library-asset-store";
@@ -14,7 +15,7 @@ const PAGE_SIZE = 100;
 const CONVERSATION_PAGE_SIZE = 200;
 
 export async function buildUserDataExport(userId: string) {
-    const [account, points, billing, prompts, creative, generationLogs, canvasProjects, libraryAssets, dramaProjects, media, accountDeletionRequest] = await Promise.all([
+    const [account, points, billing, prompts, creative, generationLogs, canvasProjects, designProjects, libraryAssets, dramaProjects, media, accountDeletionRequest] = await Promise.all([
         getPublicUsersByIds([userId]).then((users) => users[0] || null),
         collectPages((page) => listPointRecordsPage(userId, { page, pageSize: 50 }).then((result) => ({ items: result.records, total: result.total }))),
         readBillingData(userId),
@@ -22,6 +23,7 @@ export async function buildUserDataExport(userId: string) {
         readCreativeData(userId),
         collectPages((page) => listGenerationLogs({ userId, page, pageSize: PAGE_SIZE })),
         listCanvasProjects(userId),
+        readDesignProjectArchive(userId),
         listLibraryAssets(userId),
         readDramaProjects(userId),
         listLocalMediaRegistrationsForUser(userId),
@@ -66,6 +68,7 @@ export async function buildUserDataExport(userId: string) {
             }),
         ),
         canvasProjects: sanitizePortableData(canvasProjects),
+        designProjects: sanitizePortableData(designProjects),
         libraryAssets: sanitizePortableData(libraryAssets),
         dramaProjects: sanitizePortableData(dramaProjects),
         media: media.map(({ ownerUserId: _ownerUserId, externalStorageId: _externalStorageId, externalObjectKey: _externalObjectKey, ...item }) => item),

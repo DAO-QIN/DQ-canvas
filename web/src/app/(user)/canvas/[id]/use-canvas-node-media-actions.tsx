@@ -21,7 +21,7 @@ import { type CanvasImageMaskEditPayload } from "../components/canvas-node-mask-
 import { type CanvasImageSplitParams } from "../components/canvas-node-split-dialog";
 import { type CanvasImageUpscaleParams } from "../components/canvas-node-upscale-dialog";
 import { NODE_DEFAULT_SIZE } from "../constants";
-import { CanvasNodeType, isCanvasImageNodeType, type CanvasBackgroundRemovalTask, type CanvasNodeData, type CanvasNodeMetadata, type Position } from "../types";
+import { CanvasNodeType, isCanvasImageNodeType, type CanvasBackgroundRemovalTask, type CanvasDerivedImageOperation, type CanvasNodeData, type CanvasNodeMetadata, type Position } from "../types";
 import { clearCanvasBackgroundRemovalTaskMetadata } from "../utils/canvas-active-task-binding";
 import { backgroundRemovalTaskSourceMatches, findReusableBackgroundRemovalNode, hashBackgroundRemovalOptions } from "../utils/canvas-background-removal";
 import { BACKGROUND_REFINE_MAX_BYTES, canRefineBackgroundNode } from "../utils/canvas-background-refine";
@@ -32,6 +32,7 @@ import { emotionGenerationSize } from "../utils/canvas-emotion";
 import { emotionSourceIdentity, resolveEmotionEditRequestConfig, sameEmotionSource } from "../utils/canvas-emotion-request";
 import { buildPortraitTexturePrompt, DEFAULT_PORTRAIT_TEXTURE_SETTINGS, resolvePortraitTextureSize } from "../utils/canvas-portrait-texture";
 import { nodeAnchorRatioAtY } from "../utils/canvas-connection-path";
+import { canvasDerivedImageProvenance } from "../utils/canvas-derived-image";
 
 const CanvasAssistantPanel = dynamic(() => import("../components/canvas-assistant-panel").then((mod) => mod.CanvasAssistantPanel), { ssr: false });
 const loadAssetPickerModal = () => import("../components/asset-picker-modal").then((mod) => mod.AssetPickerModal);
@@ -39,7 +40,7 @@ const AssetPickerModal = dynamic(loadAssetPickerModal, { ssr: false, loading: ()
 
 import { IMAGE_PROMPT_REVERSE_PRESET, NODE_STATUS_ERROR, NODE_STATUS_LOADING, NODE_STATUS_SUCCESS, createCanvasNode } from "./canvas-page-elements";
 import { applyNodeConfigPatch, buildAngleLabel, buildAnglePrompt, buildGenerationConfig, buildImageGenerationMetadata, canvasNodeReferenceImage, imageMetadata, isGenerationCanceled, uploadCanvasImage } from "./canvas-page-utils";
-import { beginCanvasDerivedImageRequest, currentCanvasDerivedImageSource, finishCanvasDerivedImageRequest } from "./canvas-derived-image-request-guard";
+import { beginCanvasDerivedImageRequest, currentCanvasDerivedImageSource, finishCanvasDerivedImageRequest, type CanvasDerivedImageRequestTicket } from "./canvas-derived-image-request-guard";
 
 import type { CanvasInteractions } from "./use-canvas-interactions";
 import type { CanvasPageState } from "./use-canvas-page-state";
@@ -83,7 +84,7 @@ export function useCanvasNodeMediaActions({ state, tasks, interactions }: { stat
         connectionTargetNodeIdRef,
         backgroundRemovalHandledTaskIdsRef,
     } = state;
-    const { startGenerationRequest, attachGenerationTask, finishGenerationRequest, startAndCompleteImageTask } = tasks;
+    const { startGenerationRequest, attachGenerationTask, finishGenerationRequest, invalidateGenerationRequest, startAndCompleteImageTask } = tasks;
     const { screenToCanvas, setConnecting } = interactions;
     const backgroundRemovalRequestsRef = useRef(new Set<string>());
     const backgroundRemovalControllersRef = useRef(new Map<string, AbortController>());
@@ -92,11 +93,34 @@ export function useCanvasNodeMediaActions({ state, tasks, interactions }: { stat
     const backgroundRemovalCancellationPromisesRef = useRef(new Map<string, Promise<void>>());
     const backgroundRemovalProjectIdRef = useRef(projectId);
     const derivedImageRequestsRef = useRef(new Map<string, symbol>());
+    const derivedImageChildrenRef = useRef(new Map<string, { ticket: CanvasDerivedImageRequestTicket; controller: AbortController }>());
     const derivedImageProjectIdRef = useRef(projectId);
     const [backgroundRemovalNodeIds, setBackgroundRemovalNodeIds] = useState<Set<string>>(() => new Set());
     const [backgroundRemovalStoppingNodeIds, setBackgroundRemovalStoppingNodeIds] = useState<Set<string>>(() => new Set());
     backgroundRemovalProjectIdRef.current = projectId;
     derivedImageProjectIdRef.current = projectId;
+
+    const discardDerivedImageChild = useCallback(
+        (childId: string) => {
+            derivedImageChildrenRef.current.get(childId)?.controller.abort();
+            invalidateGenerationRequest(childId);
+            derivedImageChildrenRef.current.delete(childId);
+            setNodes((current) => current.filter((item) => item.id !== childId));
+            setConnections((current) => current.filter((connection) => connection.fromNodeId !== childId && connection.toNodeId !== childId));
+            setSelectedNodeIds((current) => {
+                if (!current.has(childId)) return current;
+                const next = new Set(current);
+                next.delete(childId);
+                return next;
+            });
+            setDialogNodeId((current) => (current === childId ? null : current));
+        },
+        [invalidateGenerationRequest],
+    );
+
+    const releaseDerivedImageChild = useCallback((childId: string, controller: AbortController) => {
+        if (derivedImageChildrenRef.current.get(childId)?.controller === controller) derivedImageChildrenRef.current.delete(childId);
+    }, []);
 
     useEffect(
         () => () => {
@@ -106,12 +130,30 @@ export function useCanvasNodeMediaActions({ state, tasks, interactions }: { stat
             backgroundRemovalCancellationPromisesRef.current.clear();
             backgroundRemovalRequestsRef.current.clear();
             backgroundRemovalHandledTaskIdsRef.current.clear();
+            derivedImageChildrenRef.current.forEach(({ controller }) => controller.abort());
+            const temporaryChildIds = new Set(derivedImageChildrenRef.current.keys());
+            temporaryChildIds.forEach((childId) => invalidateGenerationRequest(childId));
+            if (temporaryChildIds.size) {
+                setNodes((current) => current.filter((item) => !temporaryChildIds.has(item.id)));
+                setConnections((current) => current.filter((connection) => !temporaryChildIds.has(connection.fromNodeId) && !temporaryChildIds.has(connection.toNodeId)));
+                setSelectedNodeIds((current) => new Set(Array.from(current).filter((id) => !temporaryChildIds.has(id))));
+                setDialogNodeId((current) => (current && temporaryChildIds.has(current) ? null : current));
+            }
+            derivedImageChildrenRef.current.clear();
             derivedImageRequestsRef.current.clear();
             setBackgroundRemovalNodeIds(new Set());
             setBackgroundRemovalStoppingNodeIds(new Set());
         },
-        [projectId],
+        [invalidateGenerationRequest, projectId],
     );
+
+    useEffect(() => {
+        derivedImageChildrenRef.current.forEach(({ ticket, controller }, childId) => {
+            const source = currentCanvasDerivedImageSource(derivedImageRequestsRef.current, ticket, derivedImageProjectIdRef.current, nodes);
+            if (source && nodes.some((node) => node.id === childId)) return;
+            discardDerivedImageChild(childId);
+        });
+    }, [discardDerivedImageChild, nodes, projectId]);
 
     const handleConnectStart = useCallback(
         (event: ReactMouseEvent | ReactPointerEvent, nodeId: string, handleType: "source" | "target", handleId?: string, anchorRatio?: number) => {
@@ -332,16 +374,16 @@ export function useCanvasNodeMediaActions({ state, tasks, interactions }: { stat
         [effectiveConfig.model, effectiveConfig.textModel, message],
     );
 
-    const appendDerivedImageNode = useCallback((sourceNode: CanvasNodeData, image: UploadedImage, title: string, size: { width: number; height: number }, metadataPatch: Partial<CanvasNodeMetadata> = {}) => {
+    const appendDerivedImageNode = useCallback((sourceNode: CanvasNodeData, image: UploadedImage, title: string, size: { width: number; height: number }, operation: CanvasDerivedImageOperation, metadataPatch: Partial<CanvasNodeMetadata> = {}) => {
         const childId = nanoid();
-        const position = metadataPatch.derivedOperation ? findAvailableDerivedPosition(sourceNode, size, nodesRef.current) : { x: sourceNode.position.x + sourceNode.width + 96, y: sourceNode.position.y };
+        const position = findAvailableDerivedPosition(sourceNode, size, nodesRef.current);
         const child: CanvasNodeData = {
             id: childId,
             type: CanvasNodeType.Image,
             title,
             position,
             ...size,
-            metadata: { ...imageMetadata(image), prompt: sourceNode.metadata?.prompt, ...metadataPatch },
+            metadata: { ...imageMetadata(image), prompt: sourceNode.metadata?.prompt, ...canvasDerivedImageProvenance(sourceNode, operation), ...metadataPatch },
         };
         setNodes((prev) => [...prev, child]);
         setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: sourceNode.id, toNodeId: childId }]);
@@ -466,10 +508,7 @@ export function useCanvasNodeMediaActions({ state, tasks, interactions }: { stat
             }
 
             const size = fitNodeSize(image.width, image.height, Math.max(220, latestSource.width), Math.max(220, latestSource.height));
-            appendDerivedImageNode(latestSource, image, image.backgroundRemovalOptions.outputMode === "mask" ? "主体蒙版" : image.backgroundRemovalOptions.outputMode === "color" ? "换背景结果" : "抠图结果", size, {
-                derivedOperation: "remove-background",
-                sourceNodeId: latestSource.id,
-                sourceStorageKey: task.sourceStorageKey,
+            appendDerivedImageNode(latestSource, image, image.backgroundRemovalOptions.outputMode === "mask" ? "主体蒙版" : image.backgroundRemovalOptions.outputMode === "color" ? "换背景结果" : "抠图结果", size, "remove-background", {
                 backgroundRemovalOptions: image.backgroundRemovalOptions,
                 backgroundRemovalOptionsHash: image.backgroundRemovalOptionsHash,
             });
@@ -490,7 +529,7 @@ export function useCanvasNodeMediaActions({ state, tasks, interactions }: { stat
                 const image = await uploadCanvasImage(dataUrl);
                 const currentSource = currentCanvasDerivedImageSource(derivedImageRequestsRef.current, ticket, derivedImageProjectIdRef.current, nodesRef.current);
                 if (!currentSource) throw new Error("源图片已删除或替换，未保存标注结果");
-                appendDerivedImageNode(currentSource, image, `标注 · ${currentSource.title || "图片"}`, fitNodeSize(image.width, image.height, currentSource.width, currentSource.height));
+                appendDerivedImageNode(currentSource, image, `标注 · ${currentSource.title || "图片"}`, fitNodeSize(image.width, image.height, currentSource.width, currentSource.height), "annotation");
                 setAnnotationNodeId(null);
                 message.success("标注图片已保存为新节点");
             } catch (error) {
@@ -565,6 +604,7 @@ export function useCanvasNodeMediaActions({ state, tasks, interactions }: { stat
                         composerContent,
                         portraitTexture,
                         status: NODE_STATUS_LOADING,
+                        ...canvasDerivedImageProvenance(source, "portrait-texture"),
                         ...generationMetadata,
                     },
                 };
@@ -579,7 +619,6 @@ export function useCanvasNodeMediaActions({ state, tasks, interactions }: { stat
                     const currentSource = currentCanvasDerivedImageSource(derivedImageRequestsRef.current, ticket, derivedImageProjectIdRef.current, nodesRef.current);
                     if (!currentSource || !nodesRef.current.some((item) => item.id === childId)) throw new DOMException("Portrait texture source changed", "AbortError");
                 };
-                validatePortraitTextureSource();
                 await startAndCompleteImageTask(childId, generationConfig, prompt, [sourceReference], undefined, controller, validatePortraitTextureSource);
                 const completedSource = currentCanvasDerivedImageSource(derivedImageRequestsRef.current, ticket, derivedImageProjectIdRef.current, nodesRef.current);
                 if (!completedSource) {
@@ -848,19 +887,16 @@ export function useCanvasNodeMediaActions({ state, tasks, interactions }: { stat
             if (!canRefineBackgroundNode(node)) throw new Error("该节点不是可细化的抠图结果");
             if (result.type !== "image/png") throw new Error("边缘细化结果必须为 PNG 图片");
             if (result.size > BACKGROUND_REFINE_MAX_BYTES) throw new Error("细化后的 PNG 超过 30MB，请先缩小图片后重试");
-            const sourceStorageKey = node.metadata?.storageKey?.trim();
-            const sourceContent = node.metadata?.content;
+            const ticket = beginCanvasDerivedImageRequest(derivedImageRequestsRef.current, projectId, "refine-background", node);
+            if (!ticket) throw new Error("该图片的边缘细化结果正在保存中");
             const requestKey = `canvas-background-refine:${node.id}`;
             message.loading({ content: "正在保存细化结果…", key: requestKey, duration: 0 });
             try {
                 const image = await uploadCanvasImage(result);
-                const latestSource = nodesRef.current.find((item) => item.id === node.id);
-                if (!latestSource || latestSource.metadata?.content !== sourceContent || latestSource.metadata?.storageKey?.trim() !== sourceStorageKey) throw new Error("源抠图结果已变化，请重新打开细化面板");
+                const latestSource = currentCanvasDerivedImageSource(derivedImageRequestsRef.current, ticket, derivedImageProjectIdRef.current, nodesRef.current);
+                if (!latestSource) throw new Error("源抠图结果已变化，请重新打开细化面板");
                 const refinedSize = fitNodeSize(image.width, image.height, Math.max(220, latestSource.width), Math.max(220, latestSource.height));
-                appendDerivedImageNode(latestSource, image, "边缘细化结果", refinedSize, {
-                    derivedOperation: "refine-background",
-                    sourceNodeId: latestSource.id,
-                    sourceStorageKey,
+                appendDerivedImageNode(latestSource, image, "边缘细化结果", refinedSize, "refine-background", {
                     backgroundRemovalOptions: latestSource.metadata?.backgroundRemovalOptions,
                     backgroundRemovalOptionsHash: latestSource.metadata?.backgroundRemovalOptionsHash,
                 });
@@ -870,118 +906,201 @@ export function useCanvasNodeMediaActions({ state, tasks, interactions }: { stat
                 const reason = error instanceof Error ? error : new Error("边缘细化结果保存失败");
                 message.error({ content: reason.message, key: requestKey });
                 throw reason;
+            } finally {
+                finishCanvasDerivedImageRequest(derivedImageRequestsRef.current, ticket);
             }
         },
-        [appendDerivedImageNode, message, setBackgroundRefineNodeId],
+        [appendDerivedImageNode, message, projectId, setBackgroundRefineNodeId],
     );
 
     const cropImageNode = useCallback(
         async (node: CanvasNodeData, crop: CanvasImageCropRect) => {
             if (!node.metadata?.content) return;
-            const cropped = await cropDataUrl(node.metadata.content, crop);
-            const image = await uploadCanvasImage(cropped);
-            const width = Math.min(node.width, Math.max(220, image.width));
-            appendDerivedImageNode(node, image, "Cropped Image", { width, height: width * (image.height / image.width) });
-            setCropNodeId(null);
+            const ticket = beginCanvasDerivedImageRequest(derivedImageRequestsRef.current, projectId, "crop", node);
+            if (!ticket) {
+                message.info("该图片正在裁剪处理中");
+                return;
+            }
+            try {
+                const source = currentCanvasDerivedImageSource(derivedImageRequestsRef.current, ticket, derivedImageProjectIdRef.current, nodesRef.current);
+                if (!source) throw new Error("源图片已删除或替换，未创建裁剪结果");
+                const cropped = await cropDataUrl(source.metadata!.content!, crop);
+                const image = await uploadCanvasImage(cropped);
+                const currentSource = currentCanvasDerivedImageSource(derivedImageRequestsRef.current, ticket, derivedImageProjectIdRef.current, nodesRef.current);
+                if (!currentSource) throw new Error("源图片已删除或替换，已丢弃裁剪结果");
+                const width = Math.min(currentSource.width, Math.max(220, image.width));
+                appendDerivedImageNode(currentSource, image, "Cropped Image", { width, height: width * (image.height / image.width) }, "crop");
+                setCropNodeId(null);
+            } catch (error) {
+                const reason = error instanceof Error ? error : new Error("图片裁剪失败");
+                message.error(reason.message);
+                throw reason;
+            } finally {
+                finishCanvasDerivedImageRequest(derivedImageRequestsRef.current, ticket);
+            }
         },
-        [appendDerivedImageNode],
+        [appendDerivedImageNode, message, projectId, setCropNodeId],
     );
 
     const splitImageNode = useCallback(
         async (node: CanvasNodeData, params: CanvasImageSplitParams) => {
             if (!node.metadata?.content) return;
-            setSplitNodeId(null);
-            const pieces = await splitDataUrl(node.metadata.content, params);
-            const gap = 16;
-            const cellWidth = node.width / params.columns;
-            const cellHeight = node.height / params.rows;
-            const startX = node.position.x + node.width + 96;
-            const startY = node.position.y;
-            const childNodes = await Promise.all(
-                pieces.map(async (piece) => {
-                    const image = await uploadCanvasImage(piece.dataUrl);
-                    const id = nanoid();
-                    return {
-                        id,
-                        type: CanvasNodeType.Image,
-                        title: `${node.title || "图片"} ${piece.row + 1}-${piece.column + 1}`,
-                        position: { x: startX + piece.column * (cellWidth + gap), y: startY + piece.row * (cellHeight + gap) },
-                        width: cellWidth,
-                        height: cellHeight,
-                        metadata: {
-                            ...imageMetadata(image),
-                            prompt: node.metadata?.prompt,
-                        },
-                    } satisfies CanvasNodeData;
-                }),
-            );
-            setNodes((prev) => [...prev, ...childNodes]);
-            setConnections((prev) => [...prev, ...childNodes.map((child) => ({ id: nanoid(), fromNodeId: node.id, toNodeId: child.id }))]);
-            setSelectedNodeIds(new Set(childNodes.map((child) => child.id)));
-            setSelectedConnectionId(null);
-            setDialogNodeId(null);
-            message.success(`已切分为 ${childNodes.length} 个子节点`);
+            const ticket = beginCanvasDerivedImageRequest(derivedImageRequestsRef.current, projectId, "split", node);
+            if (!ticket) {
+                message.info("该图片正在切分处理中");
+                return;
+            }
+            try {
+                const source = currentCanvasDerivedImageSource(derivedImageRequestsRef.current, ticket, derivedImageProjectIdRef.current, nodesRef.current);
+                if (!source) throw new Error("源图片已删除或替换，未创建切分结果");
+                const pieces = await splitDataUrl(source.metadata!.content!, params);
+                const images = await Promise.all(pieces.map(async (piece) => ({ piece, image: await uploadCanvasImage(piece.dataUrl) })));
+                const currentSource = currentCanvasDerivedImageSource(derivedImageRequestsRef.current, ticket, derivedImageProjectIdRef.current, nodesRef.current);
+                if (!currentSource) throw new Error("源图片已删除或替换，已丢弃切分结果");
+                const gap = 16;
+                const cellWidth = currentSource.width / params.columns;
+                const cellHeight = currentSource.height / params.rows;
+                const startX = currentSource.position.x + currentSource.width + 96;
+                const startY = currentSource.position.y;
+                const childNodes = images.map(
+                    ({ piece, image }) =>
+                        ({
+                            id: nanoid(),
+                            type: CanvasNodeType.Image,
+                            title: `${currentSource.title || "图片"} ${piece.row + 1}-${piece.column + 1}`,
+                            position: { x: startX + piece.column * (cellWidth + gap), y: startY + piece.row * (cellHeight + gap) },
+                            width: cellWidth,
+                            height: cellHeight,
+                            metadata: { ...imageMetadata(image), prompt: currentSource.metadata?.prompt, ...canvasDerivedImageProvenance(currentSource, "split") },
+                        }) satisfies CanvasNodeData,
+                );
+                setNodes((prev) => [...prev, ...childNodes]);
+                setConnections((prev) => [...prev, ...childNodes.map((child) => ({ id: nanoid(), fromNodeId: currentSource.id, toNodeId: child.id }))]);
+                setSelectedNodeIds(new Set(childNodes.map((child) => child.id)));
+                setSelectedConnectionId(null);
+                setDialogNodeId(null);
+                setSplitNodeId(null);
+                message.success(`已切分为 ${childNodes.length} 个子节点`);
+            } catch (error) {
+                const reason = error instanceof Error ? error : new Error("图片切分失败");
+                message.error(reason.message);
+                throw reason;
+            } finally {
+                finishCanvasDerivedImageRequest(derivedImageRequestsRef.current, ticket);
+            }
         },
-        [message],
+        [message, projectId, setDialogNodeId, setSelectedConnectionId, setSelectedNodeIds, setSplitNodeId],
     );
 
     const maskEditImageNode = useCallback(
         async (node: CanvasNodeData, payload: CanvasImageMaskEditPayload) => {
             if (!node.metadata?.content) return;
+            const ticket = beginCanvasDerivedImageRequest(derivedImageRequestsRef.current, projectId, "mask-edit", node);
+            if (!ticket) {
+                message.info("该图片正在进行局部编辑");
+                return;
+            }
             const generationConfig = { ...buildGenerationConfig(effectiveConfig, node, "image"), count: "1", size: node.metadata?.size || "auto" };
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
                 openConfigDialog(true);
+                finishCanvasDerivedImageRequest(derivedImageRequestsRef.current, ticket);
                 return;
             }
             const userPrompt = payload.prompt.trim();
             const prompt = `只修改蒙版透明区域，其他区域保持不变。${userPrompt}`;
-            const childId = nanoid();
-            const source = canvasNodeReferenceImage(node);
-            const generationMetadata = buildImageGenerationMetadata("edit", generationConfig, 1, [source]);
-            setMaskEditNodeId(null);
-            setRunningNodeId(childId);
-            setNodes((prev) => [
-                ...prev,
-                {
-                    id: childId,
-                    type: CanvasNodeType.Image,
-                    title: userPrompt.slice(0, 32) || "局部编辑结果",
-                    position: { x: node.position.x + node.width + 96, y: node.position.y },
-                    width: node.width,
-                    height: node.height,
-                    metadata: { prompt, status: NODE_STATUS_LOADING, ...generationMetadata },
-                },
-            ]);
-            setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: node.id, toNodeId: childId }]);
-            setSelectedNodeIds(new Set([childId]));
-            setSelectedConnectionId(null);
-            setDialogNodeId(childId);
-            const controller = startGenerationRequest(childId, node.id, childId);
+            let childId: string | null = null;
+            let controller: AbortController | null = null;
             try {
-                await startAndCompleteImageTask(childId, generationConfig, prompt, [source], { id: `${node.id}-mask`, name: "mask.png", type: "image/png", dataUrl: payload.maskDataUrl }, controller);
+                const sourceNode = currentCanvasDerivedImageSource(derivedImageRequestsRef.current, ticket, derivedImageProjectIdRef.current, nodesRef.current);
+                if (!sourceNode) {
+                    message.error("源图片已删除或替换，未创建局部编辑任务");
+                    return;
+                }
+                childId = nanoid();
+                const source = canvasNodeReferenceImage(sourceNode);
+                const generationMetadata = buildImageGenerationMetadata("edit", generationConfig, 1, [source]);
+                setMaskEditNodeId(null);
+                setRunningNodeId(childId);
+                setNodes((prev) => [
+                    ...prev,
+                    {
+                        id: childId!,
+                        type: CanvasNodeType.Image,
+                        title: userPrompt.slice(0, 32) || "局部编辑结果",
+                        position: findAvailableDerivedPosition(sourceNode, { width: sourceNode.width, height: sourceNode.height }, nodesRef.current),
+                        width: sourceNode.width,
+                        height: sourceNode.height,
+                        metadata: { prompt, status: NODE_STATUS_LOADING, ...canvasDerivedImageProvenance(sourceNode, "mask-edit"), ...generationMetadata },
+                    },
+                ]);
+                setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: sourceNode.id, toNodeId: childId! }]);
+                setSelectedNodeIds(new Set([childId]));
+                setSelectedConnectionId(null);
+                setDialogNodeId(childId);
+                controller = startGenerationRequest(childId, sourceNode.id, childId);
+                derivedImageChildrenRef.current.set(childId, { ticket, controller });
+                const validateMaskEditSource = () => {
+                    const currentSource = currentCanvasDerivedImageSource(derivedImageRequestsRef.current, ticket, derivedImageProjectIdRef.current, nodesRef.current);
+                    if (!currentSource || !childId || !nodesRef.current.some((item) => item.id === childId)) throw new DOMException("Mask edit source changed", "AbortError");
+                };
+                await startAndCompleteImageTask(childId, generationConfig, prompt, [source], { id: `${sourceNode.id}-mask`, name: "mask.png", type: "image/png", dataUrl: payload.maskDataUrl }, controller, validateMaskEditSource, sourceNode.id);
+                const completedSource = currentCanvasDerivedImageSource(derivedImageRequestsRef.current, ticket, derivedImageProjectIdRef.current, nodesRef.current);
+                if (!completedSource) {
+                    discardDerivedImageChild(childId);
+                    message.error("源图片已删除或替换，已丢弃局部编辑结果");
+                }
             } catch (error) {
-                if (isGenerationCanceled(error)) return;
+                if (childId && !currentCanvasDerivedImageSource(derivedImageRequestsRef.current, ticket, derivedImageProjectIdRef.current, nodesRef.current)) {
+                    discardDerivedImageChild(childId);
+                    if (ticket.projectId === derivedImageProjectIdRef.current) message.error("源图片已删除或替换，已丢弃局部编辑结果");
+                    return;
+                }
+                if (isGenerationCanceled(error)) {
+                    if (childId) discardDerivedImageChild(childId);
+                    return;
+                }
                 const errorDetails = generationErrorMessage(error);
                 message.error(errorDetails);
-                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails, imageTask: undefined } } : item)));
+                if (childId) setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails, imageTask: undefined } } : item)));
             } finally {
-                finishGenerationRequest(childId, controller);
-                setRunningNodeId(null);
+                if (childId && controller) {
+                    releaseDerivedImageChild(childId, controller);
+                    finishGenerationRequest(childId, controller);
+                }
+                finishCanvasDerivedImageRequest(derivedImageRequestsRef.current, ticket);
+                setRunningNodeId((current) => (current === childId ? null : current));
             }
         },
-        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startAndCompleteImageTask, startGenerationRequest],
+        [discardDerivedImageChild, effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, projectId, releaseDerivedImageChild, startAndCompleteImageTask, startGenerationRequest],
     );
 
     const upscaleImageNode = useCallback(
         async (node: CanvasNodeData, params: CanvasImageUpscaleParams) => {
             if (!node.metadata?.content) return;
-            setUpscaleNodeId(null);
-            const upscaled = await upscaleDataUrl(node.metadata.content, params);
-            const image = await uploadCanvasImage(upscaled);
-            const size = fitNodeSize(image.width, image.height);
-            appendDerivedImageNode(node, image, "Upscaled Image", size);
+            const ticket = beginCanvasDerivedImageRequest(derivedImageRequestsRef.current, projectId, "upscale", node);
+            if (!ticket) {
+                message.info("该图片正在放大处理中");
+                return;
+            }
+            try {
+                const source = currentCanvasDerivedImageSource(derivedImageRequestsRef.current, ticket, derivedImageProjectIdRef.current, nodesRef.current);
+                if (!source) throw new Error("源图片已删除或替换，未创建放大结果");
+                const upscaled = await upscaleDataUrl(source.metadata!.content!, params);
+                const image = await uploadCanvasImage(upscaled);
+                const currentSource = currentCanvasDerivedImageSource(derivedImageRequestsRef.current, ticket, derivedImageProjectIdRef.current, nodesRef.current);
+                if (!currentSource) throw new Error("源图片已删除或替换，已丢弃放大结果");
+                const size = fitNodeSize(image.width, image.height);
+                appendDerivedImageNode(currentSource, image, "Upscaled Image", size, "upscale");
+                setUpscaleNodeId(null);
+            } catch (error) {
+                const reason = error instanceof Error ? error : new Error("图片放大失败");
+                message.error(reason.message);
+                throw reason;
+            } finally {
+                finishCanvasDerivedImageRequest(derivedImageRequestsRef.current, ticket);
+            }
         },
-        [appendDerivedImageNode],
+        [appendDerivedImageNode, message, projectId, setUpscaleNodeId],
     );
 
     const generateAngleNode = useCallback(
@@ -1033,7 +1152,7 @@ export function useCanvasNodeMediaActions({ state, tasks, interactions }: { stat
                         position: { x: source.position.x + source.width + 96, y: source.position.y },
                         width: imageConfig.width,
                         height: imageConfig.height,
-                        metadata: { prompt, status: NODE_STATUS_LOADING, ...generationMetadata },
+                        metadata: { prompt, status: NODE_STATUS_LOADING, ...canvasDerivedImageProvenance(source, "angle"), ...generationMetadata },
                     },
                 ]);
                 setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: source.id, toNodeId: childId! }]);
@@ -1144,7 +1263,7 @@ export function useCanvasNodeMediaActions({ state, tasks, interactions }: { stat
                 position: { x: source.position.x + source.width + 96, y: source.position.y },
                 width: source.width,
                 height: source.height,
-                metadata: { prompt: payload.prompt, status: NODE_STATUS_LOADING, ...generationMetadata, emotionEdit },
+                metadata: { prompt: payload.prompt, status: NODE_STATUS_LOADING, ...canvasDerivedImageProvenance(source, "emotion"), ...generationMetadata, emotionEdit },
             };
 
             setEmotionNodeId(null);
@@ -1172,7 +1291,6 @@ export function useCanvasNodeMediaActions({ state, tasks, interactions }: { stat
                 if (!currentSource || !target?.metadata?.emotionEdit || !sameEmotionSource(target.metadata.emotionEdit, currentSource)) throw new DOMException("Emotion source changed", "AbortError");
             };
             try {
-                validateEmotionSource();
                 await startAndCompleteImageTask(
                     childId,
                     generationConfig,

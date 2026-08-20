@@ -4,8 +4,10 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useLayoutEffect } from "react";
 
 import { isGenerationTaskNeedsReviewError } from "@/services/api/generation-task-state";
+import { cancelCanvasGenerationTask } from "@/services/api/generation-tasks";
 import { CanvasNodeType, isCanvasImageNodeType } from "../types";
 import { clearCanvasBackgroundRemovalTaskMetadata, clearHandledCanvasBackgroundRemovalTaskMetadataFromNodes } from "../utils/canvas-active-task-binding";
+import { canvasDerivedImageSourceMatches } from "../utils/canvas-derived-image";
 import { classifyCanvasVideoTaskFailure } from "./canvas-video-task-recovery";
 
 const CanvasAssistantPanel = dynamic(() => import("../components/canvas-assistant-panel").then((mod) => mod.CanvasAssistantPanel), { ssr: false });
@@ -248,6 +250,20 @@ export function useCanvasPersistenceEffects({ state, tasks }: { state: CanvasPag
         resumable.forEach((node) => {
             const task = node.metadata?.imageTask;
             if (!task || resumingImageTaskIdsRef.current.has(node.id)) return;
+            const provenance = node.metadata?.derivedImageProvenance;
+            if (provenance && !canvasDerivedImageSourceMatches(provenance, nodes)) {
+                void cancelCanvasGenerationTask({ id: task.id, type: "image" }).catch((error) => console.warn("取消失效的派生图片任务失败", { taskId: task.id, error }));
+                setNodes((current) => current.filter((item) => item.id !== node.id));
+                setConnections((current) => current.filter((connection) => connection.fromNodeId !== node.id && connection.toNodeId !== node.id));
+                setSelectedNodeIds((current) => {
+                    if (!current.has(node.id)) return current;
+                    const next = new Set(current);
+                    next.delete(node.id);
+                    return next;
+                });
+                setDialogNodeId((current) => (current === node.id ? null : current));
+                return;
+            }
             resumingImageTaskIdsRef.current.add(node.id);
             const controller = startGenerationRequest(node.id, node.id, node.id);
             attachGenerationTask(node.id, controller, { id: task.id, type: "image" });
@@ -270,7 +286,7 @@ export function useCanvasPersistenceEffects({ state, tasks }: { state: CanvasPag
                     setRunningNodeId((current) => (current === node.id ? null : current));
                 });
         });
-    }, [attachGenerationTask, completeImageTask, effectiveConfig, finishGenerationRequest, message, nodes, projectLoaded, startGenerationRequest]);
+    }, [attachGenerationTask, completeImageTask, effectiveConfig, finishGenerationRequest, message, nodes, projectLoaded, setConnections, setDialogNodeId, setNodes, setSelectedNodeIds, startGenerationRequest]);
 
     useEffect(() => {
         if (!projectLoaded) return;

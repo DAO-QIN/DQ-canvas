@@ -26,11 +26,36 @@ describe("request public origin", () => {
         expect(requestPublicOrigin(request, "https://dq.example/app")).toBe("https://dq.example");
     });
 
+    it("uses the actual local request origin when the configured site is also loopback", () => {
+        const request = new Request("http://127.0.0.1:3100/api/test", {
+            headers: {
+                origin: "http://127.0.0.1:3100",
+                referer: "http://127.0.0.1:3100/create",
+            },
+        });
+
+        expect(requestPublicOrigin(request, "http://localhost:3000")).toBe("http://127.0.0.1:3100");
+    });
+
+    it("uses the incoming host header when the server request URL uses an internal loopback address", () => {
+        const request = new Request("http://localhost:3000/api/test", {
+            headers: { host: "127.0.0.1:3100" },
+        });
+
+        expect(requestPublicOrigin(request, "http://localhost:3000")).toBe("http://127.0.0.1:3100");
+    });
+
     it("gates forwarded values when only request headers are available", () => {
         const headers = new Headers({ host: "admin.example", "x-forwarded-host": "attacker.example", "x-forwarded-proto": "http" });
         expect(requestPublicOriginFromHeaders(headers, "http://localhost:3000", "")).toBe("https://admin.example");
 
         process.env.DQ_TRUSTED_PROXY_HOPS = "1";
         expect(requestPublicOriginFromHeaders(headers, "http://localhost:3000", "")).toBe("http://attacker.example");
+    });
+
+    it("uses the request host for local header-based requests despite a different loopback config", () => {
+        const headers = new Headers({ host: "127.0.0.1:3100" });
+
+        expect(requestPublicOriginFromHeaders(headers, "http://localhost:3000", "http://localhost:3000")).toBe("http://127.0.0.1:3100");
     });
 });

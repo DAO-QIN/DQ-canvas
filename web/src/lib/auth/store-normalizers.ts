@@ -293,7 +293,7 @@ export function normalizeAgentSkill(skill: AgentSkill): AgentSkill {
                   .filter(Boolean)
                   .slice(0, 30)
             : [],
-        workspaces: Array.isArray(skill.workspaces) ? skill.workspaces.filter((item): item is "image" | "video" | "canvas" | "drama" => ["image", "video", "canvas", "drama"].includes(item)) : ["image"],
+        workspaces: Array.isArray(skill.workspaces) ? skill.workspaces.filter((item): item is "image" | "video" | "canvas" | "design" | "drama" => ["image", "video", "canvas", "design", "drama"].includes(item)) : ["image"],
         action: skill.action === "edit" ? "edit" : "generate",
         requiresReference: Boolean(skill.requiresReference),
         defaultConfig: skill.defaultConfig && typeof skill.defaultConfig === "object" ? skill.defaultConfig : {},

@@ -17,9 +17,10 @@ import { assertReferenceCapabilities } from "@/lib/server/provider-task-config";
 import { createImageTask, createImageTaskId, failImageTaskSetup, getImageTask, touchImageTask, transitionImageTask, type ImageTask, type ImageTaskConfig, type ImageTaskReference, updateImageTask } from "@/lib/server/image-task-store";
 import { isGenerationSource, recordGenerationLog } from "@/lib/server/generation-log-store";
 import { resolveImageTaskOptions } from "@/lib/server/image-task-config";
-import { getStoredGenerationTaskByRequest, linkStoredGenerationTask, withGenerationConcurrencyLimit, type GenerationTaskContext } from "@/lib/server/generation-task-store";
+import { getStoredGenerationTaskByRequest, linkStoredGenerationTask, normalizeGenerationTaskContext, withGenerationConcurrencyLimit, type GenerationTaskContext } from "@/lib/server/generation-task-store";
 import { registerGenerationTaskAssetsForUser } from "@/lib/server/creative-runtime-service";
 import { assertCapabilityConstraints } from "@/lib/server/capability-constraints";
+import { expandDirectCreationPrompt, requiredDirectCreationReferenceSkill } from "@/lib/server/direct-creation-skill";
 import { checkGenerationRateLimit, rateLimitHeaders } from "@/lib/server/security";
 import { cleanupImageTaskReferencePayload, persistImageTaskReferencePayload } from "@/lib/server/image-task-reference-payload";
 
@@ -156,12 +157,20 @@ export async function POST(request: Request) {
             const existing = await getStoredGenerationTaskByRequest<ImageTask>("image", currentUser.id, requestId, resolvedBody.context?.attemptNo);
             if (existing) return NextResponse.json({ task: publicTask(existing) });
         }
-        if (requestId) resolvedBody.context = { ...(resolvedBody.context || {}), clientRequestId: requestId, ...(headerAttemptNo ? { attemptNo: headerAttemptNo } : {}) };
+        try {
+            resolvedBody.context = normalizeGenerationTaskContext({ ...(resolvedBody.context || {}), ...(requestId ? { clientRequestId: requestId } : {}), ...(headerAttemptNo ? { attemptNo: headerAttemptNo } : {}) });
+        } catch (error) {
+            return NextResponse.json({ error: error instanceof Error ? error.message : "任务上下文无效" }, { status: 400 });
+        }
         const configs = sanitizeConfigs(resolvedBody.config, settings);
-        const prompt = (resolvedBody.prompt || "").trim();
+        const rawPrompt = (resolvedBody.prompt || "").trim();
+        if (!configs.length || !rawPrompt) return NextResponse.json({ error: "任务参数不完整" }, { status: 400 });
+        const prompt = expandDirectCreationPrompt(rawPrompt, resolvedBody.skillIds, settings.agentSkills, "image");
         const kind = resolvedBody.kind === "edit" ? "edit" : "generation";
         if (!configs.length || !prompt) return NextResponse.json({ error: "任务参数不完整" }, { status: 400 });
         const references = Array.isArray(resolvedBody.references) ? resolvedBody.references.filter((item) => Boolean(item?.dataUrl || item?.url || item?.remoteUrl || item?.serverUrl)) : [];
+        const requiredSkill = requiredDirectCreationReferenceSkill(resolvedBody.skillIds, settings.agentSkills, "image");
+        if (requiredSkill && !references.length) return NextResponse.json({ error: `Skill ${requiredSkill.name} requires a reference asset` }, { status: 400 });
         const constrainedConfigs = configs.filter((config) => {
             try {
                 assertCapabilityConstraints(config.capabilityProfile, { capability: "image", referenceCount: references.length });

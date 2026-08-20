@@ -50,14 +50,14 @@ DQ/
 
 | 路径                           | 职责                                                                 |
 | ------------------------------ | -------------------------------------------------------------------- |
-| `web/src/app/(user)/`          | 登录后的 Agent、图片、视频、Canvas、短剧、素材、提示词和个人中心页面 |
+| `web/src/app/(user)/`          | 登录后的 Agent、图片、视频、Design、Canvas、短剧、素材、提示词和个人中心页面 |
 | `web/src/app/admin/`           | 管理员入口、运营后台和初始化配置中心                                 |
 | `web/src/app/api/`             | HTTP 入参、鉴权、服务调用和 `{ code, data, msg }` 响应映射           |
-| `web/src/components/`          | 全局布局、通用业务组件和管理后台视图                                 |
+| `web/src/components/`          | 全局布局、共享创作工作台、通用业务组件和管理后台视图                 |
 | `web/src/hooks/`               | 多页面复用的生成、会话、复制、下载和状态同步逻辑                     |
 | `web/src/services/api/`        | 浏览器到本站 Route Handler 的类型化请求                              |
 | `web/src/stores/`              | 登录用户、主题、公开配置和素材等共享客户端状态                       |
-| `web/src/lib/*.ts`             | Canvas、短剧、素材、模型、支付和创作运行时领域契约                   |
+| `web/src/lib/*.ts`             | Design、Canvas、短剧、素材、模型、支付和创作运行时领域契约           |
 | `web/src/lib/auth/`            | Session、用户、权限、积分和公开设置入口                              |
 | `web/src/lib/server/`          | 业务服务、任务编排、Provider 适配、计费、媒体与安全逻辑              |
 | `web/src/lib/server/database/` | PostgreSQL schema、参数化 Repository 和文件 Provider 回退            |
@@ -111,7 +111,24 @@ DQ/
 | `object-storage-*.ts`        | S3 兼容配置、对象访问、签名、对象管理和本地媒体迁移    |
 | `billing-*` / `payment-*`    | 商品、订单、支付、退款、对账和积分入账                 |
 | `canvas-project-*`           | Canvas 项目校验、保存和用户隔离                        |
+| `design-project-*`           | Design Document、版本、操作回执、保存和用户隔离         |
+| `workspace-handoff-*`        | Design 与 Canvas 间的稳定素材交接和目标项目更新          |
 | `drama-project-*`            | 短剧剧本、资产、分镜、版本、成本和成片状态             |
+
+## 设计项目与跨 Surface Handoff
+
+`/design` 只处理平面设计文档；`/canvas` 只处理节点工作流。共享组件位于 `web/src/components/creative-workspace/` 和各 Surface 的 Adapter 中，负责布局、生成输入、任务恢复、素材选择和无领域 UI。领域 Adapter 只把共享动作转换为对应 Surface 的读写操作，禁止把 Fabric Document 或 Canvas Store 直接传过边界。
+
+| 路径 | 职责 |
+| --- | --- |
+| `web/src/app/(user)/design/` | Design 项目列表、编辑器 Shell 和 Fabric 渲染投影 |
+| `web/src/features/design-editor/` | Design Document、操作、选择、历史、Frame、导出和 Fabric Adapter |
+| `web/src/lib/design/` | 可校验的领域契约、迁移、资源定位器和项目类型 |
+| `web/src/lib/server/design-project-*.ts` | PostgreSQL/文件 Provider、revision 乐观锁、版本和回执 |
+| `web/src/app/api/design/` | Design 项目、操作、版本和资源解析的鉴权 Route Handler |
+| `web/src/lib/server/workspace-handoff-*.ts` | 在用户、资源和目标项目校验后执行跨 Surface 素材交接 |
+
+新旧工作台布局通过公开构建变量按 Surface 切换。它们读取同一 Surface 的既有持久化数据，因此回滚布局不迁移、不删除项目数据；发布顺序和停止条件见[设计画板与共享工作台](/docs/progress/design-board)。
 
 ## Canvas 抠图请求
 

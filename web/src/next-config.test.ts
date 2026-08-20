@@ -25,6 +25,14 @@ describe("Next response headers", () => {
         expect(privateRule?.headers).toContainEqual({ key: "X-Robots-Tag", value: "noindex, nofollow, noarchive, nosnippet, noimageindex" });
     });
 
+    it("allows this site to request the browser microphone permission", async () => {
+        const config = createNextConfig("phase-production-build");
+        const rules = (await config.headers?.()) || [];
+        const globalRule = rules.find((rule) => rule.source === "/(.*)");
+
+        expect(globalRule?.headers).toContainEqual({ key: "Permissions-Policy", value: "camera=(), microphone=(self), geolocation=(), payment=()" });
+    });
+
     it("loads local environment variables for standalone production testing", async () => {
         const packageJson = JSON.parse(await readFile(resolve(process.cwd(), "package.json"), "utf8")) as { scripts?: Record<string, string> };
 

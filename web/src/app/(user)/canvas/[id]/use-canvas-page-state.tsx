@@ -73,6 +73,7 @@ export function useCanvasPageState() {
     const loadProject = useCanvasStore((state) => state.loadProject);
     const createProject = useCanvasStore((state) => state.createProject);
     const updateProject = useCanvasStore((state) => state.updateProject);
+    const flushProject = useCanvasStore((state) => state.flushProject);
     const renameProject = useCanvasStore((state) => state.renameProject);
     const deleteProjects = useCanvasStore((state) => state.deleteProjects);
     const currentProject = useCanvasStore((state) => state.projects.find((project) => project.id === projectId));
@@ -210,6 +211,7 @@ export function useCanvasPageState() {
         loadProject,
         createProject,
         updateProject,
+        flushProject,
         renameProject,
         deleteProjects,
         currentProject,
